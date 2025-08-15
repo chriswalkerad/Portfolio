@@ -34,6 +34,11 @@ class CollaborationManager {
     conflicts: new Map(),
   };
 
+  // Reconnect/backoff state
+  private reconnectTimer: number | null = null;
+  private reconnectDelayMs = 1000;
+  private readonly reconnectDelayMaxMs = 8000;
+
   // User colors for collaboration
   private userColors = [
     '#3B82F6', '#EF4444', '#10B981', '#F59E0B', 
@@ -42,6 +47,46 @@ class CollaborationManager {
 
   constructor() {
     this.initializeSocket();
+    this.setupLifecycleListeners();
+  }
+
+  private ensureConnected() {
+    if (!this.socket) return;
+    if (this.socket.connected) return;
+    try {
+      this.socket.connect();
+    } catch {
+      this.scheduleReconnect();
+    }
+  }
+
+  private setupLifecycleListeners() {
+    if (typeof window === 'undefined') return;
+    const ensure = () => this.ensureConnected();
+    window.addEventListener('focus', ensure);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') ensure();
+    });
+    window.addEventListener('online', ensure);
+  }
+
+  private scheduleReconnect() {
+    if (!this.socket) return;
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer && window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      this.ensureConnected();
+      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.reconnectDelayMaxMs);
+    }, this.reconnectDelayMs);
+  }
+
+  private resetBackoff() {
+    this.reconnectDelayMs = 1000;
+    if (this.reconnectTimer) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   private initializeSocket() {
@@ -52,22 +97,32 @@ class CollaborationManager {
     this.socket = io(baseUrl, {
       autoConnect: false,
       transports: ['websocket', 'polling'],
-      withCredentials: true
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 8000,
     });
 
     this.socket.on('connect', () => {
       console.log('Connected to collaboration server');
+      this.resetBackoff();
       this.emit('connection_established');
+      if (this.projectId && this.currentUser) {
+        this.socket!.emit('join_project', { projectId: this.projectId, user: this.currentUser });
+      }
     });
 
     this.socket.on('disconnect', (reason) => {
       console.log('Disconnected from collaboration server:', reason);
       this.emit('connection_lost');
+      if (typeof navigator !== 'undefined' && navigator.onLine) this.scheduleReconnect();
     });
 
     this.socket.on('connect_error', (error) => {
       console.error('Collaboration connection error:', error);
       this.emit('connection_error', error);
+      if (typeof navigator !== 'undefined' && navigator.onLine) this.scheduleReconnect();
     });
 
     this.socket.on('user_joined', (user: User) => {
