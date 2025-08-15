@@ -6,6 +6,7 @@ A professional-grade, browser-based content creation tool built with Next.js, Ty
 
 Complete documentation is available in the [`docs/`](./docs/) folder:
 
+- **[Project Overview](./docs/PROJECT_OVERVIEW.md)** - High-level product vision and implementation guidance
 - **[Getting Started](./docs/GETTING_STARTED.md)** - Setup and development workflow
 - **[Architecture Overview](./docs/ARCHITECTURE.md)** - Technical architecture and system design  
 - **[Design Specification](./docs/DESIGN_SPEC.md)** - UI/UX guidelines and wireframes

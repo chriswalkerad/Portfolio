@@ -10,6 +10,7 @@ Welcome to the Content Creator documentation hub. This folder contains all the g
 - **[User Experience Guidelines](./UX_GUIDELINES.md)** - Interaction patterns and usability principles
 
 ### Features & Functionality  
+- **[Project Overview](./PROJECT_OVERVIEW.md)** - High-level product vision and implementation guide
 - **[Collaboration Features](./COLLABORATION.md)** - Real-time collaboration system documentation
 - **[Feature Specifications](./FEATURES.md)** - Detailed feature requirements and specifications
 - **[API Documentation](./API.md)** - Backend APIs and data structures
