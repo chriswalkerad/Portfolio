@@ -12,6 +12,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import gsap from "gsap";
 import Draggable from "gsap/Draggable";
+import { UserCursors } from "@/components/collaboration/UserCursors";
+import { Comments } from "@/components/collaboration/Comments";
+import { ConflictResolution } from "@/components/collaboration/ConflictResolution";
+import { UserAvatars } from "@/components/collaboration/UserAvatars";
+import { getCollaborationManager } from "@/lib/collaboration";
 
 type TextVariant = "title" | "headline" | "subheadline" | "normal" | "small" | "bullet" | "number";
 type Block = {
@@ -74,6 +79,11 @@ export default function ContentCreatorPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [gridView, setGridView] = useState(false);
   
+  // Collaboration state
+  const [collaborationReady, setCollaborationReady] = useState(false);
+  const [isCollaborationEnabled, setIsCollaborationEnabled] = useState(true);
+  const [autoJoinAttempted, setAutoJoinAttempted] = useState(false);
+  
   // Undo/Redo state
   const [history, setHistory] = useState<Array<{slides: Slide[], currentSlideId: number}>>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -86,6 +96,7 @@ export default function ContentCreatorPage() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [copiedBlocks, setCopiedBlocks] = useState<Block[]>([]);
   const [textPlacementMode, setTextPlacementMode] = useState<TextVariant | null>(null);
+  const [commentMode, setCommentMode] = useState(false);
   const [marqueeSelection, setMarqueeSelection] = useState<{
     isActive: boolean;
     startX: number;
@@ -113,6 +124,8 @@ export default function ContentCreatorPage() {
       y,
       fontSize: defaultFontSize(variant),
       bold: variant === "title" || variant === "headline",
+      width: variant === "title" ? 400 : variant === "headline" ? 350 : 250,
+      height: variant === "title" ? 60 : variant === "headline" ? 50 : 40,
     };
     setSlides(prev => prev.map(slide => 
       slide.id === currentSlideId 
@@ -133,6 +146,12 @@ export default function ContentCreatorPage() {
     };
     setSlides(prev => [...prev, newSlide]);
     setCurrentSlideId(newSlide.id);
+
+    // Broadcast slide update for collaboration
+    if (collaborationReady && isCollaborationEnabled) {
+      const collaborationManager = getCollaborationManager();
+      collaborationManager.broadcastSlideUpdate(newSlide.id, newSlide);
+    }
   };
 
   const deleteSlide = (slideId: number) => {
@@ -280,15 +299,35 @@ export default function ContentCreatorPage() {
 
   const updateBlockInSlide = useCallback((blockId: number, updates: Partial<Block>) => {
     // Only save to history for significant changes (not just position updates during drag)
-    if ('text' in updates || 'fontSize' in updates || 'bold' in updates) {
+    if ('text' in updates || 'fontSize' in updates || 'bold' in updates || 'width' in updates || 'height' in updates) {
       saveToHistory();
     }
+    
     setSlides(prev => prev.map(slide => 
       slide.id === currentSlideId 
         ? { ...slide, blocks: slide.blocks.map(b => b.id === blockId ? { ...b, ...updates } : b) }
         : slide
     ));
-  }, [currentSlideId, saveToHistory]);
+
+    // Broadcast block update for collaboration (throttled for performance)
+    if (collaborationReady && isCollaborationEnabled) {
+      const collaborationManager = getCollaborationManager();
+      const currentSlide = slides.find(s => s.id === currentSlideId);
+      const block = currentSlide?.blocks.find(b => b.id === blockId);
+      if (block) {
+        // Throttle collaboration updates for position changes
+        const isPositionUpdate = 'x' in updates || 'y' in updates;
+        if (isPositionUpdate) {
+          // Debounce position updates
+          setTimeout(() => {
+            collaborationManager.broadcastBlockUpdate(currentSlideId, blockId, { ...block, ...updates });
+          }, 100);
+        } else {
+          collaborationManager.broadcastBlockUpdate(currentSlideId, blockId, { ...block, ...updates });
+        }
+      }
+    }
+  }, [currentSlideId, saveToHistory, collaborationReady, isCollaborationEnabled, slides]);
 
   // Layer management functions
   const bringToFront = useCallback((blockId: number) => {
@@ -352,6 +391,102 @@ export default function ContentCreatorPage() {
       // ignore
     }
   }, []);
+
+  // Collaboration event listeners
+  useEffect(() => {
+    if (!collaborationReady || !isCollaborationEnabled) return;
+
+    const collaborationManager = getCollaborationManager();
+
+    const handleSlideUpdated = (data: { slideId: number; slide: Slide; userId: string }) => {
+      // Don't update if it's our own change
+      const currentUser = collaborationManager.getCurrentUser();
+      if (data.userId === currentUser?.id) return;
+
+      setSlides(prev => {
+        const existingIndex = prev.findIndex(s => s.id === data.slideId);
+        if (existingIndex >= 0) {
+          const newSlides = [...prev];
+          newSlides[existingIndex] = data.slide;
+          return newSlides;
+        } else {
+          return [...prev, data.slide];
+        }
+      });
+    };
+
+    const handleBlockUpdated = (data: { slideId: number; blockId: number; block: Block; userId: string }) => {
+      // Don't update if it's our own change
+      const currentUser = collaborationManager.getCurrentUser();
+      if (data.userId === currentUser?.id) return;
+
+      setSlides(prev => prev.map(slide => 
+        slide.id === data.slideId 
+          ? {
+              ...slide,
+              blocks: slide.blocks.map(b => 
+                b.id === data.blockId ? data.block : b
+              )
+            }
+          : slide
+      ));
+    };
+
+    collaborationManager.on('slide_updated', handleSlideUpdated);
+    collaborationManager.on('block_updated', handleBlockUpdated);
+
+    return () => {
+      collaborationManager.off('slide_updated', handleSlideUpdated);
+      collaborationManager.off('block_updated', handleBlockUpdated);
+    };
+  }, [collaborationReady, isCollaborationEnabled]);
+
+  // Auto-join collaboration
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    if (isCollaborationEnabled && !collaborationReady && !autoJoinAttempted) {
+      setAutoJoinAttempted(true);
+      
+      const autoJoin = async () => {
+        try {
+          const collaborationManager = getCollaborationManager();
+          
+          // Generate or get a stored project ID
+          let projectId = localStorage.getItem('cc_project_id');
+          if (!projectId) {
+            projectId = `PROJECT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+            localStorage.setItem('cc_project_id', projectId);
+          }
+          
+          // Generate a random user name or get stored one
+          let userName = localStorage.getItem('cc_user_name');
+          if (!userName) {
+            const names = ['Alex', 'Jordan', 'Casey', 'Riley', 'Taylor', 'Morgan', 'Jamie', 'Avery'];
+            userName = names[Math.floor(Math.random() * names.length)];
+            localStorage.setItem('cc_user_name', userName);
+          }
+          
+          await collaborationManager.joinProject(projectId, {
+            name: userName,
+            email: `${userName.toLowerCase()}@demo.com`,
+          });
+          
+          setCollaborationReady(true);
+          console.log(`Auto-joined collaboration as ${userName} in project ${projectId}`);
+        } catch (error) {
+          console.error('Failed to auto-join collaboration:', error);
+          // Retry after 2 seconds if it fails
+          setTimeout(() => {
+            setAutoJoinAttempted(false);
+          }, 2000);
+        }
+      };
+      
+      // Small delay to ensure page is loaded
+      setTimeout(autoJoin, 1500);
+    }
+  }, [isCollaborationEnabled, collaborationReady, autoJoinAttempted]);
 
   // Debounced save to localStorage
   useEffect(() => {
@@ -420,7 +555,7 @@ export default function ContentCreatorPage() {
       }
 
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.contentEditable === 'true') {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.contentEditable === 'true' || target.isContentEditable) {
         return;
       }
 
@@ -624,6 +759,24 @@ export default function ContentCreatorPage() {
               setSelectedIds(blocks.map(b => b.id));
               setSelectedSlideIds([]);
             }
+          } else {
+            // 'A' key: Return to normal mode
+            e.preventDefault();
+            setCommentMode(false);
+            setTextPlacementMode(null);
+            setSelectedIds([]);
+            setSelectedSlideIds([]);
+          }
+          break;
+          
+        case 'c':
+          if (!isCmd) {
+            // 'C' key: Enter comment mode
+            e.preventDefault();
+            setCommentMode(true);
+            setTextPlacementMode(null);
+            setSelectedIds([]);
+            setSelectedSlideIds([]);
           }
           break;
       }
@@ -637,30 +790,41 @@ export default function ContentCreatorPage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
+    // Set up draggables for all blocks (kill existing ones first)
     blocks.forEach((b) => {
       const el = document.getElementById(`block-${b.id}`);
       if (!el) return;
       
-      // Kill existing draggable instance
-      Draggable.get(el)?.kill();
+      // Kill any existing draggable instance
+      const existingDraggable = Draggable.get(el);
+      if (existingDraggable) {
+        existingDraggable.kill();
+      }
       
       // Create new draggable instance
       Draggable.create(el, {
         type: "x,y",
         bounds: canvas,
         inertia: false,
-        minimumMovement: 3, // Lower threshold for smoother click-to-drag
+        minimumMovement: 2, // Small threshold for dragging
         dragClickables: false,
-        onPress(e) {
-          // This fires immediately on mouse down - handle selection here
-          // Only handle normal clicks (modifier keys are handled by React onMouseDown)
-          const event = e.originalEvent || e;
-          if (!event.metaKey && !event.ctrlKey && !event.shiftKey) {
-            setSelectedIds([b.id]);
-            setSelectedSlideIds([]);
-            setEditingId(null);
-            setTextPlacementMode(null);
+        allowEventDefault: true,
+        onPress(e: unknown) {
+          // Handle selection on mouse down; ignore when editing text
+          type WithOriginalEvent = { originalEvent: Event };
+          const hasOriginal = (val: unknown): val is WithOriginalEvent => (
+            typeof val === 'object' && val !== null && 'originalEvent' in val
+          );
+          const ev: Event = hasOriginal(e) ? e.originalEvent : (e as Event);
+          const target = (ev.target as HTMLElement | null);
+
+          // If clicking on editable text, cancel drag entirely
+          if (target && (target.isContentEditable || target.contentEditable === 'true')) {
+            (this as unknown as { endDrag: () => void }).endDrag();
+            return;
           }
+
+
         },
         onDragStart() {
           // Ensure block is selected when drag actually starts
@@ -723,14 +887,14 @@ export default function ContentCreatorPage() {
         },
       });
       
-      // Set initial position
+      // Set initial position using GSAP transforms
       gsap.set(el, { x: b.x, y: b.y });
     });
     
     return () => {
       blocks.forEach((b) => Draggable.get(`#block-${b.id}`)?.kill());
     };
-  }, [blocks, selectedIds, saveToHistory, updateBlockInSlide]);
+  }, [blocks, saveToHistory, updateBlockInSlide]);
 
   // GSAP Draggable for slide reordering
   useEffect(() => {
@@ -821,123 +985,136 @@ export default function ContentCreatorPage() {
     };
   }, [slides, sidebarCollapsed, reorderSlides]);
 
-  // GSAP Draggable for resize handles
+  // GSAP Draggable for resize handles  
   useEffect(() => {
-    if (!resizingId) return;
+    // Set up resize handles for selected blocks (only when exactly one is selected)
+    if (selectedIds.length !== 1) return;
+    
+    const blockId = selectedIds[0];
+    const block = blocks.find(b => b.id === blockId);
+    if (!block) return;
 
-    const blockElement = document.getElementById(`block-${resizingId}`);
-    const textElement = document.getElementById(`text-${resizingId}`);
+    const blockElement = document.getElementById(`block-${blockId}`);
+    const textElement = document.getElementById(`text-${blockId}`);
     if (!blockElement || !textElement) return;
 
-    // Get all resize handles for this block
+    // Clean up any existing draggables on handles
     const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
-    
+    handles.forEach(direction => {
+      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
+      if (handle) {
+        Draggable.get(handle)?.kill();
+      }
+    });
+
+    // Set up new draggables for each handle
     handles.forEach(direction => {
       const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
       if (!handle) return;
 
-      Draggable.get(handle)?.kill();
-      
       Draggable.create(handle, {
         type: "x,y",
+        trigger: handle,
+        onPress() {
+          setResizingId(blockId);
+        },
         onDrag() {
-          const block = blocks.find(b => b.id === resizingId);
-          if (!block) return;
+          const currentBlock = blocks.find(b => b.id === blockId);
+          if (!currentBlock) return;
 
           const { x: dragX, y: dragY } = this as unknown as { x: number; y: number };
-          const currentWidth = block.width || 200;
-          const currentHeight = block.height || 50;
           
-          let newWidth = currentWidth;
-          let newHeight = currentHeight;
-          let newX = block.x;
-          let newY = block.y;
+          // Get initial dimensions
+          const initialWidth = currentBlock.width || 250;
+          const initialHeight = currentBlock.height || 40;
+          
+          let newWidth = initialWidth;
+          let newHeight = initialHeight;
+          let deltaX = 0;
+          let deltaY = 0;
 
           // Calculate new dimensions based on handle direction
           switch (direction) {
             case 'e': // East - right edge
-              newWidth = Math.max(80, currentWidth + dragX);
+              newWidth = Math.max(80, initialWidth + dragX);
               break;
             case 'w': // West - left edge  
-              newWidth = Math.max(80, currentWidth - dragX);
-              newX = block.x + dragX;
+              newWidth = Math.max(80, initialWidth - dragX);
+              deltaX = Math.min(dragX, initialWidth - 80);
               break;
             case 's': // South - bottom edge
-              newHeight = Math.max(30, currentHeight + dragY);
+              newHeight = Math.max(30, initialHeight + dragY);
               break;
             case 'n': // North - top edge
-              newHeight = Math.max(30, currentHeight - dragY);
-              newY = block.y + dragY;
+              newHeight = Math.max(30, initialHeight - dragY);
+              deltaY = Math.min(dragY, initialHeight - 30);
               break;
             case 'se': // Southeast - bottom right
-              newWidth = Math.max(80, currentWidth + dragX);
-              newHeight = Math.max(30, currentHeight + dragY);
+              newWidth = Math.max(80, initialWidth + dragX);
+              newHeight = Math.max(30, initialHeight + dragY);
               break;
             case 'sw': // Southwest - bottom left
-              newWidth = Math.max(80, currentWidth - dragX);
-              newHeight = Math.max(30, currentHeight + dragY);
-              newX = block.x + dragX;
+              newWidth = Math.max(80, initialWidth - dragX);
+              newHeight = Math.max(30, initialHeight + dragY);
+              deltaX = Math.min(dragX, initialWidth - 80);
               break;
             case 'ne': // Northeast - top right
-              newWidth = Math.max(80, currentWidth + dragX);
-              newHeight = Math.max(30, currentHeight - dragY);
-              newY = block.y + dragY;
+              newWidth = Math.max(80, initialWidth + dragX);
+              newHeight = Math.max(30, initialHeight - dragY);
+              deltaY = Math.min(dragY, initialHeight - 30);
               break;
             case 'nw': // Northwest - top left
-              newWidth = Math.max(80, currentWidth - dragX);
-              newHeight = Math.max(30, currentHeight - dragY);
-              newX = block.x + dragX;
-              newY = block.y + dragY;
+              newWidth = Math.max(80, initialWidth - dragX);
+              newHeight = Math.max(30, initialHeight - dragY);
+              deltaX = Math.min(dragX, initialWidth - 80);
+              deltaY = Math.min(dragY, initialHeight - 30);
               break;
           }
 
-          // Apply the new dimensions to the text element
-          gsap.set(textElement, { 
-            width: newWidth,
-            height: newHeight,
-            minWidth: newWidth,
-            minHeight: newHeight
-          });
-          
-          // Update block position if needed
-          if (newX !== block.x || newY !== block.y) {
-            gsap.set(blockElement, { x: newX, y: newY });
-          }
+          // Apply live updates (size only; do not translate the block)
+          textElement.style.width = `${newWidth}px`;
+          textElement.style.height = `${newHeight}px`;
         },
         onDragEnd() {
-          const block = blocks.find(b => b.id === resizingId);
-          if (!block) return;
+          const currentBlock = blocks.find(b => b.id === blockId);
+          if (!currentBlock) return;
 
-          const textRect = textElement.getBoundingClientRect();
+          // Get final dimensions only (position unchanged)
+          const finalWidth = parseFloat(textElement.style.width) || currentBlock.width || 250;
+          const finalHeight = parseFloat(textElement.style.height) || currentBlock.height || 40;
           
-          // Get current GSAP transform values
-          const blockX = gsap.getProperty(blockElement, "x") as number;
-          const blockY = gsap.getProperty(blockElement, "y") as number;
-          
+          // Update the block state (no x/y change)
           saveToHistory();
-          updateBlockInSlide(resizingId, {
-            width: textRect.width,
-            height: textRect.height,
-            x: blockX,
-            y: blockY
+          updateBlockInSlide(blockId, {
+            width: finalWidth,
+            height: finalHeight
           });
           
           // Reset handle position
-          gsap.set(this.target, { x: 0, y: 0 });
+          gsap.set(handle, { x: 0, y: 0 });
+          setResizingId(null);
         }
       });
     });
 
     return () => {
+      // Cleanup on unmount or dependency change
       handles.forEach(direction => {
         const handle = blockElement?.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
-        if (handle) Draggable.get(handle)?.kill();
+        if (handle) {
+          Draggable.get(handle)?.kill();
+        }
       });
     };
-  }, [resizingId, blocks, saveToHistory, updateBlockInSlide]);
+  }, [selectedIds, blocks, saveToHistory, updateBlockInSlide]);
 
   return (
     <div className="flex min-h-dvh flex-col">
+      {/* Conflict Resolution */}
+      {collaborationReady && isCollaborationEnabled && (
+        <ConflictResolution />
+      )}
+
       <header className="border-b">
         <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2">
           {editingTitle ? (
@@ -988,6 +1165,16 @@ export default function ContentCreatorPage() {
                 </>
               )}
             </div>
+            
+            {/* User Avatars */}
+            {collaborationReady && isCollaborationEnabled && (
+              <UserAvatars 
+                position="header" 
+                showSlideIndicator 
+                currentSlideId={currentSlideId} 
+              />
+            )}
+            
             {!gridView && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1006,6 +1193,27 @@ export default function ContentCreatorPage() {
               </DropdownMenu>
             )}
 
+            <Button 
+              variant={collaborationReady ? "default" : "outline"}
+              onClick={() => {
+                if (isCollaborationEnabled && collaborationReady) {
+                  // Leave collaboration when disabled
+                  const collaborationManager = getCollaborationManager();
+                  collaborationManager.leaveProject();
+                  setCollaborationReady(false);
+                  setIsCollaborationEnabled(false);
+                  setAutoJoinAttempted(false);
+                } else {
+                  // Re-enable collaboration
+                  setIsCollaborationEnabled(true);
+                  setAutoJoinAttempted(false);
+                }
+              }}
+              className="text-xs"
+              title={collaborationReady ? `Project: ${typeof window !== 'undefined' ? localStorage.getItem('cc_project_id') || 'Unknown' : 'Unknown'}` : 'Click to enable collaboration'}
+            >
+              {collaborationReady ? `Live: ${typeof window !== 'undefined' ? localStorage.getItem('cc_user_name') || 'User' : 'User'}` : "Collaboration Off"}
+            </Button>
             <Button variant="ghost">Play</Button>
             <Button variant="ghost">Share</Button>
             <Button>Publish</Button>
@@ -1066,6 +1274,14 @@ export default function ContentCreatorPage() {
                 <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/50 to-transparent rounded-b-lg">
                   <p className="text-xs font-medium text-white truncate">{slide.title}</p>
                 </div>
+                
+                {/* Grid View Slide Avatars */}
+                {collaborationReady && isCollaborationEnabled && (
+                  <UserAvatars 
+                    position="slide" 
+                    slideId={slide.id} 
+                  />
+                )}
                 {slides.length > 1 && (
                   <Button
                     size="sm"
@@ -1166,6 +1382,14 @@ export default function ContentCreatorPage() {
                 <div className="p-2">
                   <p className="text-xs font-medium truncate">{slide.title}</p>
                 </div>
+                
+                {/* Slide Avatars */}
+                {collaborationReady && isCollaborationEnabled && (
+                  <UserAvatars 
+                    position="slide" 
+                    slideId={slide.id} 
+                  />
+                )}
                 {slides.length > 1 && (
                   <Button
                     size="sm"
@@ -1189,7 +1413,14 @@ export default function ContentCreatorPage() {
           <div className="border-b p-2" />
           <div 
             className="flex h-[calc(100%-2.5rem)] items-center justify-center p-6" 
-            onClick={() => { setSelectedIds([]); setSelectedSlideIds([]); setEditingId(null); setTextPlacementMode(null); }}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setSelectedIds([]);
+                setSelectedSlideIds([]);
+                setEditingId(null);
+                setTextPlacementMode(null);
+              }
+            }}
             tabIndex={-1}
           >
             {slides.length === 0 ? (
@@ -1204,13 +1435,26 @@ export default function ContentCreatorPage() {
                 ref={canvasRef} 
                 id="canvas" 
                 className={`relative h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded border bg-white outline-none ${
-                  textPlacementMode ? 'cursor-crosshair' : 'cursor-default'
+                  commentMode ? 'cursor-help' : textPlacementMode ? 'cursor-crosshair' : 'cursor-default'
                 }`} 
                 tabIndex={0}
                 style={{aspectRatio: '16/9'}}
               onMouseDown={(e) => {
                 // Ensure canvas is focused for keyboard shortcuts
                 e.currentTarget.focus();
+                
+                if (commentMode) {
+                  // In comment mode, clicking adds a comment
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const y = e.clientY - rect.top;
+                  
+                  if (collaborationReady && isCollaborationEnabled) {
+                    const collaborationManager = getCollaborationManager();
+                    collaborationManager.addComment(currentSlideId, x, y, 'Click to edit this comment...');
+                  }
+                  return;
+                }
                 
                 if (textPlacementMode) {
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -1244,6 +1488,29 @@ export default function ContentCreatorPage() {
               }}
 
             >
+              {/* Collaboration Components */}
+              {collaborationReady && isCollaborationEnabled && (
+                <>
+                  <UserCursors canvasRef={canvasRef} />
+                  <Comments currentSlideId={currentSlideId} canvasRef={canvasRef} />
+                </>
+              )}
+              
+              {/* Mode indicators */}
+              {commentMode && (
+                <div className="absolute top-4 left-4 bg-blue-600 text-white text-sm px-3 py-2 rounded-lg pointer-events-auto font-medium z-50">
+                  💬 Comment Mode - Click to add comments, press &apos;A&apos; to exit
+                </div>
+              )}
+              
+              {textPlacementMode && (
+                <div className="absolute top-4 left-4 bg-green-600 text-white text-sm px-3 py-2 rounded-lg pointer-events-auto font-medium z-50">
+                  ✏️ Text Mode - Click to place {textPlacementMode}, press &apos;A&apos; to exit
+                </div>
+              )}
+              
+
+
               {/* Marquee selection rectangle */}
               {marqueeSelection.isActive && (
                 <div
@@ -1262,8 +1529,12 @@ export default function ContentCreatorPage() {
                 <div
                   id={`block-${b.id}`}
                   key={b.id}
-                  className={`absolute cursor-move rounded bg-white/90 shadow-xs ${selectedIds.includes(b.id) ? "ring-2 ring-primary" : "ring-1 ring-transparent"}`}
-                  style={{ left: 0, top: 0, zIndex: b.zIndex || 0 }}
+                  className={`absolute rounded bg-white/90 shadow-xs ${selectedIds.includes(b.id) ? "ring-2 ring-primary" : "ring-1 ring-transparent"}`}
+                  style={{ 
+                    left: 0, 
+                    top: 0, 
+                    zIndex: b.zIndex || 0
+                  }}
                   onMouseDown={(e) => {
                     if (textPlacementMode) return;
                     
@@ -1271,23 +1542,24 @@ export default function ContentCreatorPage() {
                     const canvas = canvasRef.current;
                     if (canvas) canvas.focus();
                     
-                    // Only handle special modifier clicks here - let GSAP handle normal clicks
                     if (e.metaKey || e.ctrlKey) {
-                      e.stopPropagation(); // Prevent GSAP from handling this
-                      // Cmd/Ctrl+click for toggle selection
+                      e.stopPropagation();
                       setSelectedIds(prev => 
                         prev.includes(b.id) 
                           ? prev.filter(id => id !== b.id)
                           : [...prev, b.id]
                       );
                     } else if (e.shiftKey) {
-                      e.stopPropagation(); // Prevent GSAP from handling this
-                      // Shift+click for additive selection
+                      e.stopPropagation();
                       setSelectedIds(prev => 
                         prev.includes(b.id) ? prev : [...prev, b.id]
                       );
+                    } else {
+                      // Single click selects this block, allow GSAP to also handle drag
+                      setSelectedIds([b.id]);
+                      setSelectedSlideIds([]);
+                      setEditingId(null);
                     }
-                    // For normal clicks, let GSAP handle it (don't stopPropagation)
                   }}
                 >
                   {/* Text formatting toolbar */}
@@ -1328,19 +1600,23 @@ export default function ContentCreatorPage() {
                   
                   <div
                     id={`text-${b.id}`}
-                    className={`min-w-[80px] whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant]}`}
+                    className={`whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant]} overflow-hidden resize-none`}
                     contentEditable={editingId === b.id}
                     suppressContentEditableWarning
                     style={{ 
                       fontSize: b.fontSize, 
                       fontWeight: b.bold ? 700 : undefined, 
-                      cursor: editingId === b.id ? "text" : "move",
+                      cursor: editingId === b.id ? "text" : "inherit",
                       userSelect: editingId === b.id ? "text" : "none",
                       color: b.color || "#000000",
-                      width: b.width || 'auto',
-                      height: b.height || 'auto',
-                      minWidth: b.width ? `${b.width}px` : '80px',
-                      minHeight: b.height ? `${b.height}px` : 'auto'
+                      width: b.width ? `${b.width}px` : '250px',
+                      height: b.height ? `${b.height}px` : 'auto',
+                      minWidth: '80px',
+                      minHeight: '30px',
+                      boxSizing: 'border-box',
+                      wordWrap: 'break-word',
+                      overflowWrap: 'break-word',
+                      pointerEvents: editingId === b.id ? 'auto' : 'none' // Important: prevent drag conflicts
                     }}
                     onBlur={(e) => {
                       const text = (e.currentTarget as HTMLElement).textContent || "";
@@ -1372,7 +1648,18 @@ export default function ContentCreatorPage() {
                       if (e.key !== "Enter") return;
                       if (b.variant === "bullet") {
                         e.preventDefault();
-                        document.execCommand("insertText", false, "\n• ");
+                        // Modern way to insert text without execCommand
+                        const selection = window.getSelection();
+                        if (selection && selection.rangeCount > 0) {
+                          const range = selection.getRangeAt(0);
+                          range.deleteContents();
+                          const textNode = document.createTextNode("\n• ");
+                          range.insertNode(textNode);
+                          range.setStartAfter(textNode);
+                          range.setEndAfter(textNode);
+                          selection.removeAllRanges();
+                          selection.addRange(range);
+                        }
                       } else if (b.variant === "number") {
                         e.preventDefault();
                         const txt = (e.currentTarget as HTMLElement).textContent || "";
@@ -1381,7 +1668,18 @@ export default function ContentCreatorPage() {
                           .map((line) => parseInt((line.match(/^(\d+)\./)?.[1] as string) || "0", 10))
                           .filter((n) => n > 0);
                         const next = nums.length ? Math.max(...nums) + 1 : (txt.split("\n").length || 0) + 1;
-                        document.execCommand("insertText", false, `\n${next}. `);
+                        // Modern way to insert text without execCommand
+                        const selection = window.getSelection();
+                        if (selection && selection.rangeCount > 0) {
+                          const range = selection.getRangeAt(0);
+                          range.deleteContents();
+                          const textNode = document.createTextNode(`\n${next}. `);
+                          range.insertNode(textNode);
+                          range.setStartAfter(textNode);
+                          range.setEndAfter(textNode);
+                          selection.removeAllRanges();
+                          selection.addRange(range);
+                        }
                       }
                     }}
                   >
@@ -1391,33 +1689,42 @@ export default function ContentCreatorPage() {
                   {/* Resize handles - only show for selected blocks */}
                   {selectedIds.includes(b.id) && selectedIds.length === 1 && (
                     <>
+
                       {/* Corner handles */}
-                      <div className="absolute -top-1 -left-1 w-3 h-3 bg-primary border border-white rounded-full cursor-nw-resize" 
+                      <div className="absolute -top-1 -left-1 w-4 h-4 bg-primary border border-white rounded-full cursor-nw-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="nw"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary border border-white rounded-full cursor-ne-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-primary border border-white rounded-full cursor-ne-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="ne"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute -bottom-1 -left-1 w-3 h-3 bg-primary border border-white rounded-full cursor-sw-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute -bottom-1 -left-1 w-4 h-4 bg-primary border border-white rounded-full cursor-sw-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="sw"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-primary border border-white rounded-full cursor-se-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-primary border border-white rounded-full cursor-se-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="se"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
                       
                       {/* Edge handles */}
-                      <div className="absolute -top-1 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-n-resize" 
+                      <div className="absolute -top-1 left-0 right-0 h-3 bg-transparent cursor-n-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="n"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-s-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute -bottom-1 left-0 right-0 h-3 bg-transparent cursor-s-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="s"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute top-1/2 -left-1 transform -translate-y-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-w-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute top-0 bottom-0 -left-1 w-3 bg-transparent cursor-w-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="w"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
-                      <div className="absolute top-1/2 -right-1 transform -translate-y-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-e-resize" 
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                      <div className="absolute top-0 bottom-0 -right-1 w-3 bg-transparent cursor-e-resize pointer-events-auto" 
+                           style={{ zIndex: 1000 }}
                            data-resize-handle="e"
-                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
                     </>
                   )}
                 </div>

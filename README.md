@@ -1,6 +1,30 @@
 # Content Creator
 
-A professional-grade, browser-based content creation tool built with Next.js, TypeScript, and GSAP. Create interactive slide presentations with drag-and-drop text elements, real-time editing, and advanced layout controls.
+A professional-grade, browser-based content creation tool built with Next.js, TypeScript, and GSAP. Create interactive slide presentations with drag-and-drop text elements, **real-time collaboration**, and advanced layout controls.
+
+## 📚 Documentation
+
+Complete documentation is available in the [`docs/`](./docs/) folder:
+
+- **[Getting Started](./docs/GETTING_STARTED.md)** - Setup and development workflow
+- **[Architecture Overview](./docs/ARCHITECTURE.md)** - Technical architecture and system design  
+- **[Design Specification](./docs/DESIGN_SPEC.md)** - UI/UX guidelines and wireframes
+- **[Collaboration Features](./docs/COLLABORATION.md)** - Real-time collaboration documentation
+
+## 🚀 Real-Time Collaboration Features
+
+✅ **Live Multi-User Editing**: Multiple users can edit simultaneously with instant synchronization
+✅ **User Presence**: See who's online with avatars in header and on slides
+✅ **Live Cursors**: Watch other users' mouse movements in real-time  
+✅ **Comments System**: Add feedback with Cmd/Ctrl + double-click
+✅ **Conflict Resolution**: Automatic detection and resolution of editing conflicts
+✅ **Auto-Sync**: All changes propagate instantly to all collaborators
+
+### Quick Start with Collaboration
+```bash
+npm run dev:full  # Starts both Next.js and Socket.io servers
+```
+Open multiple browser tabs to test real-time collaboration!
 
 ![Content Creator Demo](https://via.placeholder.com/800x400/1f2937/ffffff?text=Content+Creator+Interface)
 
