@@ -1,0 +1,151 @@
+# Content Creator Rules
+
+## Project Vision
+Build a clean, intuitive content creation tool focused on text-based presentations. Think Figma/Sketch simplicity for slide creation.
+
+## Core Principles
+- **Functionality over decoration** - Every feature must solve a real user need
+- **Keyboard-first workflow** - Power users should fly through tasks
+- **Minimal UI surface** - Hide complexity, show only what's needed
+- **Direct manipulation** - Click, drag, type - no unnecessary modals or steps
+
+## Coding Standards
+
+### Comments
+- Keep comments minimal and essential only
+- No verbose descriptions or emoji spam
+- Remove obvious comments like "// Button component"
+- Only comment complex logic or non-obvious decisions
+
+### Code Style
+- Use concise, readable code
+- Prefer inline conditionals: `{icon && <Icon />}` over multi-line blocks
+- Keep component props clean and well-typed
+- Use meaningful variable names, avoid abbreviations
+
+### React Components
+- Use TypeScript interfaces for props
+- Keep components focused and single-purpose
+- Use functional components with hooks
+- Export components as default when appropriate
+
+### Styling
+- Use Tailwind CSS utility classes
+- Keep className strings readable with proper spacing
+- Group related styles together
+- Use consistent spacing and formatting
+
+### State Management
+- Keep state flat and simple
+- Use local state unless global is truly needed
+- Avoid over-engineering with complex state patterns
+- Prefer React hooks over external libraries
+
+## Feature Guidelines
+
+### UI/UX
+- No unnecessary notifications or banners
+- Visual feedback through cursor changes and highlights
+- Consistent interaction patterns across all tools
+- Clean, minimal design system
+
+### Keyboard Shortcuts
+- Must work from anywhere (not just when focused)
+- Follow platform conventions (Cmd on Mac, Ctrl on Windows)
+- Context-aware behavior (Cmd+A selects blocks vs slides)
+- Escape always cancels current operation
+
+### Performance
+- Auto-save to localStorage (no backend needed yet)
+- Efficient re-renders with proper React patterns
+- Smooth animations using GSAP where needed
+- Lazy load non-critical features
+
+## What We're Building (Priority Order)
+
+### Core Features (MVP)
+1. ✅ Text block creation and editing
+2. ✅ Multi-slide management
+3. ✅ Drag and drop positioning
+4. ✅ Keyboard shortcuts
+5. ✅ Auto-save persistence
+6. 🔄 Multi-selection (in progress)
+7. 📝 Copy/paste between slides
+8. 📝 Undo/redo system
+
+### Future Features (Don't Delete)
+- Export to PDF/images
+- Media blocks (images, videos)
+- Animation timeline
+- Collaboration features
+- Templates and themes
+- Presentation mode
+
+## Code Organization
+
+### File Structure
+```
+app/
+  page.tsx           # Main Content Creator
+  help/page.tsx      # Help documentation
+  layout.tsx         # Root layout
+  globals.css        # Global styles
+components/          # Reusable UI components (future)
+types/              # Shared TypeScript types (future)
+lib/                # Utilities and helpers (future)
+```
+
+### State Structure
+Keep state flat and typed:
+```typescript
+type Block = { id: number; variant: TextVariant; text: string; x: number; y: number; fontSize?: number; bold?: boolean; }
+type Slide = { id: number; title: string; blocks: Block[]; }
+```
+
+## Anti-Patterns to Avoid
+
+### Over-Engineering
+- ❌ Complex state management for simple features
+- ❌ Excessive abstraction before patterns emerge
+- ❌ Feature flags for everything
+- ❌ Premature optimization
+
+### UI Bloat
+- ❌ Confirmation dialogs for non-destructive actions
+- ❌ Loading states for instant operations
+- ❌ Progress bars for < 1 second operations
+- ❌ Tooltips explaining obvious UI
+
+### Code Bloat
+- ❌ Verbose prop drilling
+- ❌ Excessive commenting
+- ❌ Multiple ways to do the same thing
+- ❌ Dead code "just in case"
+
+## Current Technical Debt
+
+### High Priority Fixes
+- [ ] Complete multi-selection refactor
+- [ ] Simplify keyboard shortcut system
+- [ ] Remove debug console.logs
+- [ ] Clean up unused state variables
+
+### Medium Priority
+- [ ] Extract reusable components
+- [ ] Improve TypeScript types
+- [ ] Optimize re-renders
+- [ ] Add proper error boundaries
+
+## Success Metrics
+- Can create a 5-slide presentation in under 2 minutes
+- Keyboard shortcuts feel natural to Figma/Sketch users
+- Zero unnecessary clicks or confirmations
+- App loads and saves instantly
+- Code is readable by any React developer
+
+## Remember
+- Have fun building this
+- Keep it simple and direct
+- Quality over quantity in features
+- User workflow trumps code purity
+
