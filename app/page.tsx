@@ -1352,28 +1352,23 @@ export default function ContentCreatorPage() {
                   style={{ left: 0, top: 0, zIndex: b.zIndex || 0 }}
                   onMouseDown={(e) => {
                     if (textPlacementMode || shapePlacementMode) return;
-                    
                     // Ensure canvas stays focused for keyboard shortcuts
                     const canvas = canvasRef.current;
                     if (canvas) canvas.focus();
-                    
-                    // Stop propagation for all clicks so container onClick doesn't clear selection
-                    e.stopPropagation();
-                    
-                    // Handle multi-select modifiers here; GSAP onPress will handle normal click selection
+                    // For multi-select modifiers, handle here and stop propagation
                     if (e.metaKey || e.ctrlKey) {
-                      setSelectedIds(prev => 
-                        prev.includes(b.id) 
-                          ? prev.filter(id => id !== b.id)
-                          : [...prev, b.id]
-                      );
+                      e.stopPropagation();
+                      setSelectedIds(prev => (
+                        prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id]
+                      ));
                     } else if (e.shiftKey) {
-                      setSelectedIds(prev => 
+                      e.stopPropagation();
+                      setSelectedIds(prev => (
                         prev.includes(b.id) ? prev : [...prev, b.id]
-                      );
+                      ));
                     }
+                    // For normal clicks, let GSAP Draggable onPress/select and drag run
                   }}
-                  onClick={(e) => { e.stopPropagation(); }}
                 >
                   {/* Text formatting toolbar - only show for text blocks */}
                   {editingId === b.id && b.type === "text" && (
