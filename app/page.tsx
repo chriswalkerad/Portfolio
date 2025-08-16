@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { ToolBar as ToolBarComp } from "@/components/ToolBar";
 import gsap from "gsap";
 import Draggable from "gsap/Draggable";
 
@@ -81,6 +82,8 @@ const defaultFontSize = (v: TextVariant) =>
   } as const)[v];
 
 gsap.registerPlugin(Draggable);
+
+// Removed inline ToolBar in favor of components/ToolBar
 
 export default function ContentCreatorPage() {
   const [title, setTitle] = useState("Title of episode can go here");
@@ -162,6 +165,22 @@ export default function ContentCreatorPage() {
     setSelectedIds([newBlock.id]);
     setSelectedSlideIds([]);
     return newBlock.id;
+  };
+
+  // Add text immediately to the current slide (no placement click needed)
+  const addTextNow = (variant: TextVariant) => {
+    const canvas = canvasRef.current;
+    let x = 80;
+    let y = 80;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      x = Math.max(24, rect.width * 0.25);
+      y = Math.max(24, rect.height * 0.25);
+    }
+    const newId = addText(variant, x, y);
+    setTextPlacementMode(null);
+    setShapePlacementMode(null);
+    setTimeout(() => setEditingId(newId), 50);
   };
 
   const addSlide = () => {
@@ -1004,7 +1023,7 @@ export default function ContentCreatorPage() {
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="bg-white/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2">
+        <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2 relative">
           {editingTitle ? (
             <Input 
               value={title} 
@@ -1031,75 +1050,29 @@ export default function ContentCreatorPage() {
               {title || "Click to set title"}
             </h1>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            {/* Save Status Indicator */}
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              {saveStatus === 'saving' && (
-                <>
-                  <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-                  <span>Saving...</span>
-                </>
-              )}
-              {saveStatus === 'saved' && (
-                <>
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span>Saved</span>
-                </>
-              )}
-              {saveStatus === 'error' && (
-                <>
-                  <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                  <span>Error saving</span>
-                </>
-              )}
-            </div>
-            {!gridView && (
-              <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline">Text</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={() => addText("title")} className="text-4xl font-bold py-3">Title</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("headline")} className="text-2xl font-semibold py-2">Headline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("subheadline")} className="text-lg font-medium py-1">Subheadline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("normal")} className="text-base">Normal text</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("small")} className="text-sm">Small text</DropdownMenuItem>
-                  <Separator className="my-1" />
-                  <DropdownMenuItem onClick={() => addText("bullet")} className="text-base font-normal">• Bullet list</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("number")} className="text-base font-normal">1. Number list</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-                
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline">Shapes</Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuItem onClick={() => addShape("rectangle")} className="flex items-center gap-2">
-                      <div className="w-4 h-3 bg-primary rounded-sm"></div>
-                      Rectangle
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => addShape("circle")} className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-primary rounded-full"></div>
-                      Circle
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => addShape("triangle")} className="flex items-center gap-2">
-                      <div className="w-0 h-0 border-l-2 border-r-2 border-b-4 border-l-transparent border-r-transparent border-b-primary"></div>
-                      Triangle
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => addShape("line")} className="flex items-center gap-2">
-                      <div className="w-4 h-0.5 bg-primary"></div>
-                      Line
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            )}
+          {/* Tool bar (center floating pill) */}
+          <ToolBarComp gridView={gridView} addTextNow={addTextNow} addShape={addShape} />
 
-            <Button variant="ghost">Play</Button>
-            <Button variant="ghost">Share</Button>
-            <Button>Publish</Button>
+          <div className="ml-auto flex items-center gap-2">
+            {/* Save Status Indicator (only show when NOT saved) */}
+            {saveStatus !== 'saved' && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                {saveStatus === 'saving' && (
+                  <>
+                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                    <span>Saving…</span>
+                  </>
+                )}
+                {saveStatus === 'error' && (
+                  <>
+                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                    <span>Error saving</span>
+                  </>
+                )}
+              </div>
+            )}
+            <Button>Preview</Button>
+            <Button variant="outline">Share</Button>
           </div>
         </div>
       </header>
@@ -1266,7 +1239,7 @@ export default function ContentCreatorPage() {
           </div>
         </aside>
 
-        <main className="relative overflow-auto bg-gray-25">
+        <main className="relative overflow-auto bg-gray-50/50">
           <div 
             className="flex h-full items-center justify-center p-6" 
             onClick={() => { setSelectedIds([]); setSelectedSlideIds([]); setEditingId(null); setTextPlacementMode(null); setShapePlacementMode(null); }}
