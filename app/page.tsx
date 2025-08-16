@@ -14,10 +14,12 @@ import gsap from "gsap";
 import Draggable from "gsap/Draggable";
 
 type TextVariant = "title" | "headline" | "subheadline" | "normal" | "small" | "bullet" | "number";
+type ShapeVariant = "rectangle" | "circle" | "triangle" | "line";
 type Block = {
   id: number;
-  variant: TextVariant;
-  text: string;
+  type: "text" | "shape";
+  variant: TextVariant | ShapeVariant;
+  text?: string;
   x: number;
   y: number;
   fontSize?: number;
@@ -26,6 +28,9 @@ type Block = {
   zIndex?: number;
   width?: number;
   height?: number;
+  fillColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
 };
 
 type Slide = {
@@ -86,6 +91,7 @@ export default function ContentCreatorPage() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [copiedBlocks, setCopiedBlocks] = useState<Block[]>([]);
   const [textPlacementMode, setTextPlacementMode] = useState<TextVariant | null>(null);
+  const [shapePlacementMode, setShapePlacementMode] = useState<ShapeVariant | null>(null);
   const [marqueeSelection, setMarqueeSelection] = useState<{
     isActive: boolean;
     startX: number;
@@ -107,12 +113,37 @@ export default function ContentCreatorPage() {
     saveToHistory();
     const newBlock: Block = {
       id: nextId.current++,
+      type: "text",
       variant,
       text: defaultText(variant),
       x,
       y,
       fontSize: defaultFontSize(variant),
       bold: variant === "title" || variant === "headline",
+    };
+    setSlides(prev => prev.map(slide => 
+      slide.id === currentSlideId 
+        ? { ...slide, blocks: [...slide.blocks, newBlock] }
+        : slide
+    ));
+    setSelectedIds([newBlock.id]);
+    setSelectedSlideIds([]);
+    return newBlock.id;
+  };
+
+  const addShape = (variant: ShapeVariant, x: number = 40, y: number = 40) => {
+    saveToHistory();
+    const newBlock: Block = {
+      id: nextId.current++,
+      type: "shape",
+      variant,
+      x,
+      y,
+      width: variant === "line" ? 100 : 120,
+      height: variant === "line" ? 2 : 80,
+      fillColor: variant === "line" ? "transparent" : "#3b82f6",
+      strokeColor: "#1e40af",
+      strokeWidth: variant === "line" ? 2 : 1,
     };
     setSlides(prev => prev.map(slide => 
       slide.id === currentSlideId 
@@ -507,8 +538,10 @@ export default function ContentCreatorPage() {
             e.preventDefault();
             selectedIds.forEach(id => {
               const currentBlock = blocks.find(b => b.id === id);
-              const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant || 'normal');
-              updateBlockInSlide(id, { fontSize: Math.min(96, currentSize + 2) });
+              if (currentBlock?.type === "text") {
+                const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant as TextVariant || 'normal');
+                updateBlockInSlide(id, { fontSize: Math.min(96, currentSize + 2) });
+              }
             });
             break;
 
@@ -516,8 +549,10 @@ export default function ContentCreatorPage() {
             e.preventDefault();
             selectedIds.forEach(id => {
               const currentBlock = blocks.find(b => b.id === id);
-              const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant || 'normal');
-              updateBlockInSlide(id, { fontSize: Math.max(10, currentSize - 2) });
+              if (currentBlock?.type === "text") {
+                const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant as TextVariant || 'normal');
+                updateBlockInSlide(id, { fontSize: Math.max(10, currentSize - 2) });
+              }
             });
             break;
 
@@ -569,6 +604,7 @@ export default function ContentCreatorPage() {
           setSelectedSlideIds([]);
           setEditingId(null);
           setTextPlacementMode(null);
+          setShapePlacementMode(null);
           setResizingId(null);
           break;
 
@@ -660,6 +696,7 @@ export default function ContentCreatorPage() {
             setSelectedSlideIds([]);
             setEditingId(null);
             setTextPlacementMode(null);
+            setShapePlacementMode(null);
           }
         },
         onDragStart() {
@@ -669,6 +706,7 @@ export default function ContentCreatorPage() {
             setSelectedSlideIds([]);
             setEditingId(null);
             setTextPlacementMode(null);
+            setShapePlacementMode(null);
           }
         },
         onDrag() {
@@ -826,8 +864,13 @@ export default function ContentCreatorPage() {
     if (!resizingId) return;
 
     const blockElement = document.getElementById(`block-${resizingId}`);
-    const textElement = document.getElementById(`text-${resizingId}`);
-    if (!blockElement || !textElement) return;
+    const block = blocks.find(b => b.id === resizingId);
+    if (!blockElement || !block) return;
+    
+    const contentElement = block.type === "text" 
+      ? document.getElementById(`text-${resizingId}`)
+      : document.getElementById(`shape-${resizingId}`);
+    if (!contentElement) return;
 
     // Get all resize handles for this block
     const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
@@ -838,61 +881,68 @@ export default function ContentCreatorPage() {
 
       Draggable.get(handle)?.kill();
       
+      let initialWidth: number;
+      let initialHeight: number;
+      let initialX: number;
+      let initialY: number;
+      
       Draggable.create(handle, {
         type: "x,y",
+        onPress() {
+          // Store initial dimensions and position when drag starts
+          initialWidth = block.width || contentElement.offsetWidth || 200;
+          initialHeight = block.height || contentElement.offsetHeight || 50;
+          initialX = block.x;
+          initialY = block.y;
+        },
         onDrag() {
-          const block = blocks.find(b => b.id === resizingId);
-          if (!block) return;
-
           const { x: dragX, y: dragY } = this as unknown as { x: number; y: number };
-          const currentWidth = block.width || 200;
-          const currentHeight = block.height || 50;
           
-          let newWidth = currentWidth;
-          let newHeight = currentHeight;
-          let newX = block.x;
-          let newY = block.y;
+          let newWidth = initialWidth;
+          let newHeight = initialHeight;
+          let newX = initialX;
+          let newY = initialY;
 
-          // Calculate new dimensions based on handle direction
+          // Calculate new dimensions based on handle direction and drag distance
           switch (direction) {
             case 'e': // East - right edge
-              newWidth = Math.max(80, currentWidth + dragX);
+              newWidth = Math.max(80, initialWidth + dragX);
               break;
             case 'w': // West - left edge  
-              newWidth = Math.max(80, currentWidth - dragX);
-              newX = block.x + dragX;
+              newWidth = Math.max(80, initialWidth - dragX);
+              newX = initialX + (initialWidth - newWidth);
               break;
             case 's': // South - bottom edge
-              newHeight = Math.max(30, currentHeight + dragY);
+              newHeight = Math.max(30, initialHeight + dragY);
               break;
             case 'n': // North - top edge
-              newHeight = Math.max(30, currentHeight - dragY);
-              newY = block.y + dragY;
+              newHeight = Math.max(30, initialHeight - dragY);
+              newY = initialY + (initialHeight - newHeight);
               break;
             case 'se': // Southeast - bottom right
-              newWidth = Math.max(80, currentWidth + dragX);
-              newHeight = Math.max(30, currentHeight + dragY);
+              newWidth = Math.max(80, initialWidth + dragX);
+              newHeight = Math.max(30, initialHeight + dragY);
               break;
             case 'sw': // Southwest - bottom left
-              newWidth = Math.max(80, currentWidth - dragX);
-              newHeight = Math.max(30, currentHeight + dragY);
-              newX = block.x + dragX;
+              newWidth = Math.max(80, initialWidth - dragX);
+              newHeight = Math.max(30, initialHeight + dragY);
+              newX = initialX + (initialWidth - newWidth);
               break;
             case 'ne': // Northeast - top right
-              newWidth = Math.max(80, currentWidth + dragX);
-              newHeight = Math.max(30, currentHeight - dragY);
-              newY = block.y + dragY;
+              newWidth = Math.max(80, initialWidth + dragX);
+              newHeight = Math.max(30, initialHeight - dragY);
+              newY = initialY + (initialHeight - newHeight);
               break;
             case 'nw': // Northwest - top left
-              newWidth = Math.max(80, currentWidth - dragX);
-              newHeight = Math.max(30, currentHeight - dragY);
-              newX = block.x + dragX;
-              newY = block.y + dragY;
+              newWidth = Math.max(80, initialWidth - dragX);
+              newHeight = Math.max(30, initialHeight - dragY);
+              newX = initialX + (initialWidth - newWidth);
+              newY = initialY + (initialHeight - newHeight);
               break;
           }
 
-          // Apply the new dimensions to the text element
-          gsap.set(textElement, { 
+          // Apply the new dimensions to the content element
+          gsap.set(contentElement, { 
             width: newWidth,
             height: newHeight,
             minWidth: newWidth,
@@ -900,15 +950,12 @@ export default function ContentCreatorPage() {
           });
           
           // Update block position if needed
-          if (newX !== block.x || newY !== block.y) {
+          if (newX !== initialX || newY !== initialY) {
             gsap.set(blockElement, { x: newX, y: newY });
           }
         },
         onDragEnd() {
-          const block = blocks.find(b => b.id === resizingId);
-          if (!block) return;
-
-          const textRect = textElement.getBoundingClientRect();
+          const contentRect = contentElement.getBoundingClientRect();
           
           // Get current GSAP transform values
           const blockX = gsap.getProperty(blockElement, "x") as number;
@@ -916,8 +963,8 @@ export default function ContentCreatorPage() {
           
           saveToHistory();
           updateBlockInSlide(resizingId, {
-            width: textRect.width,
-            height: textRect.height,
+            width: contentRect.width,
+            height: contentRect.height,
             x: blockX,
             y: blockY
           });
@@ -989,21 +1036,47 @@ export default function ContentCreatorPage() {
               )}
             </div>
             {!gridView && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline">Text</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={() => addText("title")} className="text-4xl font-bold py-3">Title</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("headline")} className="text-2xl font-semibold py-2">Headline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("subheadline")} className="text-lg font-medium py-1">Subheadline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("normal")} className="text-base">Normal text</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("small")} className="text-sm">Small text</DropdownMenuItem>
-                  <Separator className="my-1" />
-                  <DropdownMenuItem onClick={() => addText("bullet")} className="text-base font-normal">• Bullet list</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("number")} className="text-base font-normal">1. Number list</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline">Text</Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuItem onClick={() => addText("title")} className="text-4xl font-bold py-3">Title</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addText("headline")} className="text-2xl font-semibold py-2">Headline</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addText("subheadline")} className="text-lg font-medium py-1">Subheadline</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addText("normal")} className="text-base">Normal text</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addText("small")} className="text-sm">Small text</DropdownMenuItem>
+                    <Separator className="my-1" />
+                    <DropdownMenuItem onClick={() => addText("bullet")} className="text-base font-normal">• Bullet list</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addText("number")} className="text-base font-normal">1. Number list</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline">Shapes</Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuItem onClick={() => addShape("rectangle")} className="flex items-center gap-2">
+                      <div className="w-4 h-3 bg-primary rounded-sm"></div>
+                      Rectangle
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addShape("circle")} className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-primary rounded-full"></div>
+                      Circle
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addShape("triangle")} className="flex items-center gap-2">
+                      <div className="w-0 h-0 border-l-2 border-r-2 border-b-4 border-l-transparent border-r-transparent border-b-primary"></div>
+                      Triangle
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => addShape("line")} className="flex items-center gap-2">
+                      <div className="w-4 h-0.5 bg-primary"></div>
+                      Line
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             )}
 
             <Button variant="ghost">Play</Button>
@@ -1058,7 +1131,7 @@ export default function ContentCreatorPage() {
                           fontSize: Math.max(6, (block.fontSize || 16) / 8),
                         }}
                       >
-                        {block.text.substring(0, 20)}
+                        {block.type === "text" ? block.text?.substring(0, 20) : block.variant}
                       </div>
                     ))}
                   </div>
@@ -1189,7 +1262,7 @@ export default function ContentCreatorPage() {
           <div className="border-b p-2" />
           <div 
             className="flex h-[calc(100%-2.5rem)] items-center justify-center p-6" 
-            onClick={() => { setSelectedIds([]); setSelectedSlideIds([]); setEditingId(null); setTextPlacementMode(null); }}
+            onClick={() => { setSelectedIds([]); setSelectedSlideIds([]); setEditingId(null); setTextPlacementMode(null); setShapePlacementMode(null); }}
             tabIndex={-1}
           >
             {slides.length === 0 ? (
@@ -1204,7 +1277,7 @@ export default function ContentCreatorPage() {
                 ref={canvasRef} 
                 id="canvas" 
                 className={`relative h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded border bg-white outline-none ${
-                  textPlacementMode ? 'cursor-crosshair' : 'cursor-default'
+                  textPlacementMode || shapePlacementMode ? 'cursor-crosshair' : 'cursor-default'
                 }`} 
                 tabIndex={0}
                 style={{aspectRatio: '16/9'}}
@@ -1218,7 +1291,17 @@ export default function ContentCreatorPage() {
                   const y = e.clientY - rect.top;
                   const newBlockId = addText(textPlacementMode, x, y);
                   setTextPlacementMode(null);
+            setShapePlacementMode(null);
                   setTimeout(() => setEditingId(newBlockId), 50);
+                  return;
+                }
+
+                if (shapePlacementMode) {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const y = e.clientY - rect.top;
+                  const newBlockId = addShape(shapePlacementMode, x, y);
+                  setShapePlacementMode(null);
                   return;
                 }
 
@@ -1262,10 +1345,10 @@ export default function ContentCreatorPage() {
                 <div
                   id={`block-${b.id}`}
                   key={b.id}
-                  className={`absolute cursor-move rounded bg-white/90 shadow-xs ${selectedIds.includes(b.id) ? "ring-2 ring-primary" : "ring-1 ring-transparent"}`}
+                  className={`absolute cursor-move rounded ${b.type === 'shape' ? 'bg-transparent' : 'bg-white/90'} shadow-xs ${selectedIds.includes(b.id) ? "ring-2 ring-primary" : "ring-1 ring-transparent"}`}
                   style={{ left: 0, top: 0, zIndex: b.zIndex || 0 }}
                   onMouseDown={(e) => {
-                    if (textPlacementMode) return;
+                    if (textPlacementMode || shapePlacementMode) return;
                     
                     // Ensure canvas stays focused for keyboard shortcuts
                     const canvas = canvasRef.current;
@@ -1290,8 +1373,8 @@ export default function ContentCreatorPage() {
                     // For normal clicks, let GSAP handle it (don't stopPropagation)
                   }}
                 >
-                  {/* Text formatting toolbar */}
-                  {editingId === b.id && (
+                  {/* Text formatting toolbar - only show for text blocks */}
+                  {editingId === b.id && b.type === "text" && (
                     <div className="absolute -top-12 left-0 bg-white border rounded-lg shadow-lg px-2 py-1 flex items-center gap-1 z-50">
                       <Button
                         size="sm"
@@ -1326,72 +1409,135 @@ export default function ContentCreatorPage() {
                     </div>
                   )}
                   
-                  <div
-                    id={`text-${b.id}`}
-                    className={`min-w-[80px] whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant]}`}
-                    contentEditable={editingId === b.id}
-                    suppressContentEditableWarning
-                    style={{ 
-                      fontSize: b.fontSize, 
-                      fontWeight: b.bold ? 700 : undefined, 
-                      cursor: editingId === b.id ? "text" : "move",
-                      userSelect: editingId === b.id ? "text" : "none",
-                      color: b.color || "#000000",
-                      width: b.width || 'auto',
-                      height: b.height || 'auto',
-                      minWidth: b.width ? `${b.width}px` : '80px',
-                      minHeight: b.height ? `${b.height}px` : 'auto'
-                    }}
-                    onBlur={(e) => {
-                      const text = (e.currentTarget as HTMLElement).textContent || "";
-                      updateBlockInSlide(b.id, { text });
-                      setEditingId(null);
-                    }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      setEditingId(b.id);
-                      setTimeout(() => {
-                        const el = document.getElementById(`text-${b.id}`);
-                        if (el) {
-                          el.focus();
-                          const range = document.createRange();
-                          range.selectNodeContents(el);
-                          const selection = window.getSelection();
-                          selection?.removeAllRanges();
-                          selection?.addRange(range);
-                        }
-                      }, 0);
-                    }}
-                    onKeyDown={(e) => {
-                      if (editingId !== b.id) return;
-                      if (e.key === "Escape") {
-                        e.preventDefault();
+                  {/* Render text blocks */}
+                  {b.type === "text" && (
+                    <div
+                      id={`text-${b.id}`}
+                      className={`min-w-[80px] whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant as TextVariant]}`}
+                      contentEditable={editingId === b.id}
+                      suppressContentEditableWarning
+                      style={{ 
+                        fontSize: b.fontSize, 
+                        fontWeight: b.bold ? 700 : undefined, 
+                        cursor: editingId === b.id ? "text" : "move",
+                        userSelect: editingId === b.id ? "text" : "none",
+                        color: b.color || "#000000",
+                        width: b.width || 'auto',
+                        height: b.height || 'auto',
+                        minWidth: b.width ? `${b.width}px` : '80px',
+                        minHeight: b.height ? `${b.height}px` : 'auto'
+                      }}
+                      onBlur={(e) => {
+                        const text = (e.currentTarget as HTMLElement).textContent || "";
+                        updateBlockInSlide(b.id, { text });
                         setEditingId(null);
-                        return;
-                      }
-                      if (e.key !== "Enter") return;
-                      if (b.variant === "bullet") {
-                        e.preventDefault();
-                        document.execCommand("insertText", false, "\n• ");
-                      } else if (b.variant === "number") {
-                        e.preventDefault();
-                        const txt = (e.currentTarget as HTMLElement).textContent || "";
-                        const nums = txt
-                          .split("\n")
-                          .map((line) => parseInt((line.match(/^(\d+)\./)?.[1] as string) || "0", 10))
-                          .filter((n) => n > 0);
-                        const next = nums.length ? Math.max(...nums) + 1 : (txt.split("\n").length || 0) + 1;
-                        document.execCommand("insertText", false, `\n${next}. `);
-                      }
-                    }}
-                  >
-                    {b.text}
-                  </div>
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditingId(b.id);
+                        setTimeout(() => {
+                          const el = document.getElementById(`text-${b.id}`);
+                          if (el) {
+                            el.focus();
+                            const range = document.createRange();
+                            range.selectNodeContents(el);
+                            const selection = window.getSelection();
+                            selection?.removeAllRanges();
+                            selection?.addRange(range);
+                          }
+                        }, 0);
+                      }}
+                      onKeyDown={(e) => {
+                        if (editingId !== b.id) return;
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditingId(null);
+                          return;
+                        }
+                        if (e.key !== "Enter") return;
+                        if (b.variant === "bullet") {
+                          e.preventDefault();
+                          document.execCommand("insertText", false, "\n• ");
+                        } else if (b.variant === "number") {
+                          e.preventDefault();
+                          const txt = (e.currentTarget as HTMLElement).textContent || "";
+                          const nums = txt
+                            .split("\n")
+                            .map((line) => parseInt((line.match(/^(\d+)\./)?.[1] as string) || "0", 10))
+                            .filter((n) => n > 0);
+                          const next = nums.length ? Math.max(...nums) + 1 : (txt.split("\n").length || 0) + 1;
+                          document.execCommand("insertText", false, `\n${next}. `);
+                        }
+                      }}
+                    >
+                      {b.text}
+                    </div>
+                  )}
+
+                  {/* Render shape blocks */}
+                  {b.type === "shape" && (
+                    <div
+                      id={`shape-${b.id}`}
+                      className="pointer-events-none"
+                      style={{
+                        width: b.width || 120,
+                        height: b.height || 80,
+                      }}
+                    >
+                      <svg
+                        width="100%"
+                        height="100%"
+                        viewBox={`0 0 ${b.width || 120} ${b.height || 80}`}
+                        className="pointer-events-none"
+                      >
+                        {b.variant === "rectangle" && (
+                          <rect
+                            x={b.strokeWidth || 1}
+                            y={b.strokeWidth || 1}
+                            width={(b.width || 120) - 2 * (b.strokeWidth || 1)}
+                            height={(b.height || 80) - 2 * (b.strokeWidth || 1)}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "circle" && (
+                          <ellipse
+                            cx={(b.width || 120) / 2}
+                            cy={(b.height || 80) / 2}
+                            rx={(b.width || 120) / 2 - (b.strokeWidth || 1)}
+                            ry={(b.height || 80) / 2 - (b.strokeWidth || 1)}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "triangle" && (
+                          <polygon
+                            points={`${(b.width || 120) / 2},${b.strokeWidth || 1} ${(b.strokeWidth || 1)},${(b.height || 80) - (b.strokeWidth || 1)} ${(b.width || 120) - (b.strokeWidth || 1)},${(b.height || 80) - (b.strokeWidth || 1)}`}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "line" && (
+                          <line
+                            x1={0}
+                            y1={(b.height || 2) / 2}
+                            x2={b.width || 100}
+                            y2={(b.height || 2) / 2}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 2}
+                          />
+                        )}
+                      </svg>
+                    </div>
+                  )}
                   
                   {/* Resize handles - only show for selected blocks */}
                   {selectedIds.includes(b.id) && selectedIds.length === 1 && (
                     <>
-                      {/* Corner handles */}
+                      {/* Corner handles - diagonal cursors */}
                       <div className="absolute -top-1 -left-1 w-3 h-3 bg-primary border border-white rounded-full cursor-nw-resize" 
                            data-resize-handle="nw"
                            onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
@@ -1405,7 +1551,7 @@ export default function ContentCreatorPage() {
                            data-resize-handle="se"
                            onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
                       
-                      {/* Edge handles */}
+                      {/* Edge handles - horizontal/vertical cursors */}
                       <div className="absolute -top-1 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-n-resize" 
                            data-resize-handle="n"
                            onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
