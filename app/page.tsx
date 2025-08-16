@@ -729,11 +729,14 @@ export default function ContentCreatorPage() {
         bounds: canvas,
         inertia: false,
         minimumMovement: 3, // Lower threshold for smoother click-to-drag
-        dragClickables: false,
+        dragClickables: true,
         onPress(e) {
+          const ev = (e && ((e as any).originalEvent || e)) as any;
+          ev?.preventDefault?.();
+          ev?.stopPropagation?.();
           // This fires immediately on mouse down - handle selection here
           // Only handle normal clicks (modifier keys are handled by React onMouseDown)
-          const event = e.originalEvent || e;
+          const event = ev;
           if (!event.metaKey && !event.ctrlKey && !event.shiftKey) {
             setSelectedIds([b.id]);
             setSelectedSlideIds([]);
@@ -902,37 +905,35 @@ export default function ContentCreatorPage() {
     };
   }, [slides, reorderSlides]);
 
-  // GSAP Draggable for resize handles
+  // GSAP Draggable for resize handles (pre-initialize for selected block)
   useEffect(() => {
-    if (!resizingId) return;
+    const selectedBlockId = selectedIds.length === 1 ? selectedIds[0] : null;
+    if (!selectedBlockId) return;
 
-    const blockElement = document.getElementById(`block-${resizingId}`);
-    const block = blocks.find(b => b.id === resizingId);
-    if (!blockElement || !block) return;
-    
-    const contentElement = block.type === "text" 
-      ? document.getElementById(`text-${resizingId}`)
-      : document.getElementById(`shape-${resizingId}`);
-    if (!contentElement) return;
+    const block = blocks.find(b => b.id === selectedBlockId);
+    if (!block) return;
 
-    // Get all resize handles for this block
+    const blockElement = document.getElementById(`block-${selectedBlockId}`);
+    const contentElement = block.type === 'text' ? document.getElementById(`text-${selectedBlockId}`) : document.getElementById(`shape-${selectedBlockId}`);
+    if (!blockElement || !contentElement) return;
+
     const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
-    
+    const cleaners: Array<() => void> = [];
+
     handles.forEach(direction => {
-      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
+      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement | null;
       if (!handle) return;
 
       Draggable.get(handle)?.kill();
-      
-      let initialWidth: number;
-      let initialHeight: number;
-      let initialX: number;
-      let initialY: number;
-      
-      Draggable.create(handle, {
-        type: "x,y",
-        onPress() {
-          // Store initial dimensions and position when drag starts
+
+      let initialWidth = 0, initialHeight = 0, initialX = 0, initialY = 0;
+      const instance = Draggable.create(handle, {
+        type: 'x,y',
+        dragClickables: true,
+        onPress(e) {
+          const ev = (e && ((e as any).originalEvent || e)) as any;
+          ev?.preventDefault?.();
+          ev?.stopPropagation?.();
           initialWidth = block.width || contentElement.offsetWidth || 200;
           initialHeight = block.height || contentElement.offsetHeight || 50;
           initialX = block.x;
@@ -940,91 +941,37 @@ export default function ContentCreatorPage() {
         },
         onDrag() {
           const { x: dragX, y: dragY } = this as unknown as { x: number; y: number };
-          
           let newWidth = initialWidth;
           let newHeight = initialHeight;
           let newX = initialX;
           let newY = initialY;
-
-          // Calculate new dimensions based on handle direction and drag distance
           switch (direction) {
-            case 'e': // East - right edge
-              newWidth = Math.max(80, initialWidth + dragX);
-              break;
-            case 'w': // West - left edge  
-              newWidth = Math.max(80, initialWidth - dragX);
-              newX = initialX + (initialWidth - newWidth);
-              break;
-            case 's': // South - bottom edge
-              newHeight = Math.max(30, initialHeight + dragY);
-              break;
-            case 'n': // North - top edge
-              newHeight = Math.max(30, initialHeight - dragY);
-              newY = initialY + (initialHeight - newHeight);
-              break;
-            case 'se': // Southeast - bottom right
-              newWidth = Math.max(80, initialWidth + dragX);
-              newHeight = Math.max(30, initialHeight + dragY);
-              break;
-            case 'sw': // Southwest - bottom left
-              newWidth = Math.max(80, initialWidth - dragX);
-              newHeight = Math.max(30, initialHeight + dragY);
-              newX = initialX + (initialWidth - newWidth);
-              break;
-            case 'ne': // Northeast - top right
-              newWidth = Math.max(80, initialWidth + dragX);
-              newHeight = Math.max(30, initialHeight - dragY);
-              newY = initialY + (initialHeight - newHeight);
-              break;
-            case 'nw': // Northwest - top left
-              newWidth = Math.max(80, initialWidth - dragX);
-              newHeight = Math.max(30, initialHeight - dragY);
-              newX = initialX + (initialWidth - newWidth);
-              newY = initialY + (initialHeight - newHeight);
-              break;
+            case 'e': newWidth = Math.max(80, initialWidth + dragX); break;
+            case 'w': newWidth = Math.max(80, initialWidth - dragX); newX = initialX + (initialWidth - newWidth); break;
+            case 's': newHeight = Math.max(30, initialHeight + dragY); break;
+            case 'n': newHeight = Math.max(30, initialHeight - dragY); newY = initialY + (initialHeight - newHeight); break;
+            case 'se': newWidth = Math.max(80, initialWidth + dragX); newHeight = Math.max(30, initialHeight + dragY); break;
+            case 'sw': newWidth = Math.max(80, initialWidth - dragX); newHeight = Math.max(30, initialHeight + dragY); newX = initialX + (initialWidth - newWidth); break;
+            case 'ne': newWidth = Math.max(80, initialWidth + dragX); newHeight = Math.max(30, initialHeight - dragY); newY = initialY + (initialHeight - newHeight); break;
+            case 'nw': newWidth = Math.max(80, initialWidth - dragX); newHeight = Math.max(30, initialHeight - dragY); newX = initialX + (initialWidth - newWidth); newY = initialY + (initialHeight - newHeight); break;
           }
-
-          // Apply the new dimensions to the content element
-          gsap.set(contentElement, { 
-            width: newWidth,
-            height: newHeight,
-            minWidth: newWidth,
-            minHeight: newHeight
-          });
-          
-          // Update block position if needed
-          if (newX !== initialX || newY !== initialY) {
-            gsap.set(blockElement, { x: newX, y: newY });
-          }
+          gsap.set(contentElement, { width: newWidth, height: newHeight, minWidth: newWidth, minHeight: newHeight });
+          if (newX !== initialX || newY !== initialY) gsap.set(blockElement, { x: newX, y: newY });
         },
         onDragEnd() {
-          const contentRect = contentElement.getBoundingClientRect();
-          
-          // Get current GSAP transform values
-          const blockX = gsap.getProperty(blockElement, "x") as number;
-          const blockY = gsap.getProperty(blockElement, "y") as number;
-          
+          const rect = contentElement.getBoundingClientRect();
+          const blockX = gsap.getProperty(blockElement, 'x') as number;
+          const blockY = gsap.getProperty(blockElement, 'y') as number;
           saveToHistory();
-          updateBlockInSlide(resizingId, {
-            width: contentRect.width,
-            height: contentRect.height,
-            x: blockX,
-            y: blockY
-          });
-          
-          // Reset handle position
+          updateBlockInSlide(selectedBlockId, { width: rect.width, height: rect.height, x: blockX, y: blockY });
           gsap.set(this.target, { x: 0, y: 0 });
         }
       });
+      cleaners.push(() => instance[0]?.kill());
     });
 
-    return () => {
-      handles.forEach(direction => {
-        const handle = blockElement?.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
-        if (handle) Draggable.get(handle)?.kill();
-      });
-    };
-  }, [resizingId, blocks, saveToHistory, updateBlockInSlide]);
+    return () => cleaners.forEach(c => c());
+  }, [selectedIds, blocks, saveToHistory, updateBlockInSlide]);
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -1248,7 +1195,6 @@ export default function ContentCreatorPage() {
         <main className="relative overflow-auto bg-gray-50/50">
           <div 
             className="flex h-full items-center justify-center p-6" 
-            onClick={() => { setSelectedIds([]); setSelectedSlideIds([]); setEditingId(null); setTextPlacementMode(null); setShapePlacementMode(null); }}
             tabIndex={-1}
           >
             {slides.length === 0 ? (
@@ -1355,14 +1301,14 @@ export default function ContentCreatorPage() {
                     // Ensure canvas stays focused for keyboard shortcuts
                     const canvas = canvasRef.current;
                     if (canvas) canvas.focus();
-                    // For multi-select modifiers, handle here and stop propagation
+                    // Always stop propagation so canvas handlers don't interfere with drag
+                    e.stopPropagation();
+                    // For multi-select modifiers, handle here
                     if (e.metaKey || e.ctrlKey) {
-                      e.stopPropagation();
                       setSelectedIds(prev => (
                         prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id]
                       ));
                     } else if (e.shiftKey) {
-                      e.stopPropagation();
                       setSelectedIds(prev => (
                         prev.includes(b.id) ? prev : [...prev, b.id]
                       ));
