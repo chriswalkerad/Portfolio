@@ -151,8 +151,14 @@ export default function ContentCreatorPage() {
       variant,
       x,
       y,
-      width: variant === "line" ? 100 : 120,
-      height: variant === "line" ? 2 : 80,
+      width:
+        variant === "line" ? 120 :
+        variant === "circle" ? 80 :
+        variant === "rectangle" ? 160 : 120,
+      height:
+        variant === "line" ? 2 :
+        variant === "circle" ? 80 :
+        variant === "rectangle" ? 100 : 100,
       fillColor: variant === "line" ? "transparent" : "#3b82f6",
       strokeColor: "#1e40af",
       strokeWidth: variant === "line" ? 2 : 1,

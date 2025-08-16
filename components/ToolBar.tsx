@@ -87,19 +87,19 @@ export function ToolBar({ gridView, addTextNow, addShape }: ToolBarProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="center" className="w-48">
             <DropdownMenuItem onClick={() => addShape('rectangle')} className="flex items-center gap-2">
-              <div className="w-4 h-3 bg-primary rounded-sm"></div>
+              <svg width="16" height="12" viewBox="0 0 16 12" className="text-primary"><rect x="1.5" y="1.5" width="13" height="9" fill="none" stroke="currentColor" strokeWidth="1.5" rx="1"/></svg>
               Rectangle
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => addShape('circle')} className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-primary rounded-full"></div>
+              <svg width="16" height="16" viewBox="0 0 16 16" className="text-primary"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
               Circle
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => addShape('triangle')} className="flex items-center gap-2">
-              <div className="w-0 h-0 border-l-2 border-r-2 border-b-4 border-l-transparent border-r-transparent border-b-primary"></div>
+              <svg width="16" height="14" viewBox="0 0 16 14" className="text-primary"><polygon points="8,2 2,12 14,12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>
               Triangle
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => addShape('line')} className="flex items-center gap-2">
-              <div className="w-4 h-0.5 bg-primary"></div>
+              <svg width="16" height="2" viewBox="0 0 16 2" className="text-primary"><line x1="1" y1="1" x2="15" y2="1" stroke="currentColor" strokeWidth="1.5"/></svg>
               Line
             </DropdownMenuItem>
           </DropdownMenuContent>
