@@ -271,27 +271,27 @@ export default function ContentCreatorPage() {
   }, [slides, currentSlideId, historyIndex]);
 
   const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const previousState = history[historyIndex - 1];
-      setSlides(previousState.slides);
-      setCurrentSlideId(previousState.currentSlideId);
-      setHistoryIndex(prev => prev - 1);
-      setSelectedIds([]);
-      setSelectedSlideIds([]);
-      setEditingId(null);
-    }
+    if (historyIndex <= 0) return;
+    const previousState = history[historyIndex - 1];
+    if (!previousState) return;
+    setSlides(previousState.slides);
+    setCurrentSlideId(previousState.currentSlideId);
+    setHistoryIndex(prev => Math.max(prev - 1, 0));
+    setSelectedIds([]);
+    setSelectedSlideIds([]);
+    setEditingId(null);
   }, [history, historyIndex]);
 
   const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextState = history[historyIndex + 1];
-      setSlides(nextState.slides);
-      setCurrentSlideId(nextState.currentSlideId);
-      setHistoryIndex(prev => prev + 1);
-      setSelectedIds([]);
-      setSelectedSlideIds([]);
-      setEditingId(null);
-    }
+    if (historyIndex >= history.length - 1) return;
+    const nextState = history[historyIndex + 1];
+    if (!nextState) return;
+    setSlides(nextState.slides);
+    setCurrentSlideId(nextState.currentSlideId);
+    setHistoryIndex(prev => Math.min(prev + 1, history.length - 1));
+    setSelectedIds([]);
+    setSelectedSlideIds([]);
+    setEditingId(null);
   }, [history, historyIndex]);
 
   const reorderSlides = useCallback((fromIndex: number, toIndex: number) => {
@@ -1357,24 +1357,23 @@ export default function ContentCreatorPage() {
                     const canvas = canvasRef.current;
                     if (canvas) canvas.focus();
                     
-                    // Only handle special modifier clicks here - let GSAP handle normal clicks
+                    // Stop propagation for all clicks so container onClick doesn't clear selection
+                    e.stopPropagation();
+                    
+                    // Handle multi-select modifiers here; GSAP onPress will handle normal click selection
                     if (e.metaKey || e.ctrlKey) {
-                      e.stopPropagation(); // Prevent GSAP from handling this
-                      // Cmd/Ctrl+click for toggle selection
                       setSelectedIds(prev => 
                         prev.includes(b.id) 
                           ? prev.filter(id => id !== b.id)
                           : [...prev, b.id]
                       );
                     } else if (e.shiftKey) {
-                      e.stopPropagation(); // Prevent GSAP from handling this
-                      // Shift+click for additive selection
                       setSelectedIds(prev => 
                         prev.includes(b.id) ? prev : [...prev, b.id]
                       );
                     }
-                    // For normal clicks, let GSAP handle it (don't stopPropagation)
                   }}
+                  onClick={(e) => { e.stopPropagation(); }}
                 >
                   {/* Text formatting toolbar - only show for text blocks */}
                   {editingId === b.id && b.type === "text" && (
