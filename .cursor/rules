@@ -149,3 +149,4 @@ type Slide = { id: number; title: string; blocks: Block[]; }
 - Quality over quantity in features
 - User workflow trumps code purity
 
+

@@ -10,19 +10,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { ToolBar as ToolBarComp } from "@/components/ToolBar";
 import gsap from "gsap";
 import Draggable from "gsap/Draggable";
-import { UserCursors } from "@/components/collaboration/UserCursors";
-import { Comments } from "@/components/collaboration/Comments";
-import { ConflictResolution } from "@/components/collaboration/ConflictResolution";
-import { UserAvatars } from "@/components/collaboration/UserAvatars";
-import { getCollaborationManager } from "@/lib/collaboration";
+
 
 type TextVariant = "title" | "headline" | "subheadline" | "normal" | "small" | "bullet" | "number";
+type ShapeVariant = "rectangle" | "circle" | "triangle" | "line";
 type Block = {
   id: number;
-  variant: TextVariant;
-  text: string;
+  type: "text" | "shape";
+  variant: TextVariant | ShapeVariant;
+  text?: string;
   x: number;
   y: number;
   fontSize?: number;
@@ -31,12 +30,23 @@ type Block = {
   zIndex?: number;
   width?: number;
   height?: number;
+  fillColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
 };
 
 type Slide = {
   id: number;
   title: string;
   blocks: Block[];
+  background?: {
+    type: "solid" | "gradient" | "image";
+    color?: string;
+    gradientStart?: string;
+    gradientEnd?: string;
+    gradientDirection?: "to-r" | "to-l" | "to-t" | "to-b" | "to-br" | "to-bl" | "to-tr" | "to-tl";
+    imageUrl?: string;
+  };
 };
 
 const variantToClasses: Record<TextVariant, string> = {
@@ -73,16 +83,13 @@ const defaultFontSize = (v: TextVariant) =>
 
 gsap.registerPlugin(Draggable);
 
+// Removed inline ToolBar in favor of components/ToolBar
+
 export default function ContentCreatorPage() {
   const [title, setTitle] = useState("Title of episode can go here");
   const [editingTitle, setEditingTitle] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
   const [gridView, setGridView] = useState(false);
-  
-  // Collaboration state
-  const [collaborationReady, setCollaborationReady] = useState(false);
-  const [isCollaborationEnabled, setIsCollaborationEnabled] = useState(true);
-  const [autoJoinAttempted, setAutoJoinAttempted] = useState(false);
   
   // Undo/Redo state
   const [history, setHistory] = useState<Array<{slides: Slide[], currentSlideId: number}>>([]);
@@ -96,7 +103,7 @@ export default function ContentCreatorPage() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [copiedBlocks, setCopiedBlocks] = useState<Block[]>([]);
   const [textPlacementMode, setTextPlacementMode] = useState<TextVariant | null>(null);
-  const [commentMode, setCommentMode] = useState(false);
+  const [shapePlacementMode, setShapePlacementMode] = useState<ShapeVariant | null>(null);
   const [marqueeSelection, setMarqueeSelection] = useState<{
     isActive: boolean;
     startX: number;
@@ -118,14 +125,13 @@ export default function ContentCreatorPage() {
     saveToHistory();
     const newBlock: Block = {
       id: nextId.current++,
+      type: "text",
       variant,
       text: defaultText(variant),
       x,
       y,
       fontSize: defaultFontSize(variant),
       bold: variant === "title" || variant === "headline",
-      width: variant === "title" ? 400 : variant === "headline" ? 350 : 250,
-      height: variant === "title" ? 60 : variant === "headline" ? 50 : 40,
     };
     setSlides(prev => prev.map(slide => 
       slide.id === currentSlideId 
@@ -137,6 +143,52 @@ export default function ContentCreatorPage() {
     return newBlock.id;
   };
 
+  const addShape = (variant: ShapeVariant, x: number = 40, y: number = 40) => {
+    saveToHistory();
+    const newBlock: Block = {
+      id: nextId.current++,
+      type: "shape",
+      variant,
+      x,
+      y,
+      width:
+        variant === "line" ? 120 :
+        variant === "circle" ? 80 :
+        variant === "rectangle" ? 160 : 120,
+      height:
+        variant === "line" ? 2 :
+        variant === "circle" ? 80 :
+        variant === "rectangle" ? 100 : 100,
+      fillColor: variant === "line" ? "transparent" : "#3b82f6",
+      strokeColor: "#1e40af",
+      strokeWidth: variant === "line" ? 2 : 1,
+    };
+    setSlides(prev => prev.map(slide => 
+      slide.id === currentSlideId 
+        ? { ...slide, blocks: [...slide.blocks, newBlock] }
+        : slide
+    ));
+    setSelectedIds([newBlock.id]);
+    setSelectedSlideIds([]);
+    return newBlock.id;
+  };
+
+  // Add text immediately to the current slide (no placement click needed)
+  const addTextNow = (variant: TextVariant) => {
+    const canvas = canvasRef.current;
+    let x = 80;
+    let y = 80;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      x = Math.max(24, rect.width * 0.25);
+      y = Math.max(24, rect.height * 0.25);
+    }
+    const newId = addText(variant, x, y);
+    setTextPlacementMode(null);
+    setShapePlacementMode(null);
+    setTimeout(() => setEditingId(newId), 50);
+  };
+
   const addSlide = () => {
     saveToHistory();
     const newSlide: Slide = {
@@ -146,12 +198,6 @@ export default function ContentCreatorPage() {
     };
     setSlides(prev => [...prev, newSlide]);
     setCurrentSlideId(newSlide.id);
-
-    // Broadcast slide update for collaboration
-    if (collaborationReady && isCollaborationEnabled) {
-      const collaborationManager = getCollaborationManager();
-      collaborationManager.broadcastSlideUpdate(newSlide.id, newSlide);
-    }
   };
 
   const deleteSlide = (slideId: number) => {
@@ -225,27 +271,27 @@ export default function ContentCreatorPage() {
   }, [slides, currentSlideId, historyIndex]);
 
   const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const previousState = history[historyIndex - 1];
-      setSlides(previousState.slides);
-      setCurrentSlideId(previousState.currentSlideId);
-      setHistoryIndex(prev => prev - 1);
-      setSelectedIds([]);
-      setSelectedSlideIds([]);
-      setEditingId(null);
-    }
+    if (historyIndex <= 0) return;
+    const previousState = history[historyIndex - 1];
+    if (!previousState) return;
+    setSlides(previousState.slides);
+    setCurrentSlideId(previousState.currentSlideId);
+    setHistoryIndex(prev => Math.max(prev - 1, 0));
+    setSelectedIds([]);
+    setSelectedSlideIds([]);
+    setEditingId(null);
   }, [history, historyIndex]);
 
   const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextState = history[historyIndex + 1];
-      setSlides(nextState.slides);
-      setCurrentSlideId(nextState.currentSlideId);
-      setHistoryIndex(prev => prev + 1);
-      setSelectedIds([]);
-      setSelectedSlideIds([]);
-      setEditingId(null);
-    }
+    if (historyIndex >= history.length - 1) return;
+    const nextState = history[historyIndex + 1];
+    if (!nextState) return;
+    setSlides(nextState.slides);
+    setCurrentSlideId(nextState.currentSlideId);
+    setHistoryIndex(prev => Math.min(prev + 1, history.length - 1));
+    setSelectedIds([]);
+    setSelectedSlideIds([]);
+    setEditingId(null);
   }, [history, historyIndex]);
 
   const reorderSlides = useCallback((fromIndex: number, toIndex: number) => {
@@ -299,35 +345,24 @@ export default function ContentCreatorPage() {
 
   const updateBlockInSlide = useCallback((blockId: number, updates: Partial<Block>) => {
     // Only save to history for significant changes (not just position updates during drag)
-    if ('text' in updates || 'fontSize' in updates || 'bold' in updates || 'width' in updates || 'height' in updates) {
+    if ('text' in updates || 'fontSize' in updates || 'bold' in updates) {
       saveToHistory();
     }
-    
     setSlides(prev => prev.map(slide => 
       slide.id === currentSlideId 
         ? { ...slide, blocks: slide.blocks.map(b => b.id === blockId ? { ...b, ...updates } : b) }
         : slide
     ));
+  }, [currentSlideId, saveToHistory]);
 
-    // Broadcast block update for collaboration (throttled for performance)
-    if (collaborationReady && isCollaborationEnabled) {
-      const collaborationManager = getCollaborationManager();
-      const currentSlide = slides.find(s => s.id === currentSlideId);
-      const block = currentSlide?.blocks.find(b => b.id === blockId);
-      if (block) {
-        // Throttle collaboration updates for position changes
-        const isPositionUpdate = 'x' in updates || 'y' in updates;
-        if (isPositionUpdate) {
-          // Debounce position updates
-          setTimeout(() => {
-            collaborationManager.broadcastBlockUpdate(currentSlideId, blockId, { ...block, ...updates });
-          }, 100);
-        } else {
-          collaborationManager.broadcastBlockUpdate(currentSlideId, blockId, { ...block, ...updates });
-        }
-      }
-    }
-  }, [currentSlideId, saveToHistory, collaborationReady, isCollaborationEnabled, slides]);
+  const updateSlideBackground = useCallback((slideId: number, background: Slide['background']) => {
+    saveToHistory();
+    setSlides(prev => prev.map(slide => 
+      slide.id === slideId 
+        ? { ...slide, background }
+        : slide
+    ));
+  }, [saveToHistory]);
 
   // Layer management functions
   const bringToFront = useCallback((blockId: number) => {
@@ -391,102 +426,6 @@ export default function ContentCreatorPage() {
       // ignore
     }
   }, []);
-
-  // Collaboration event listeners
-  useEffect(() => {
-    if (!collaborationReady || !isCollaborationEnabled) return;
-
-    const collaborationManager = getCollaborationManager();
-
-    const handleSlideUpdated = (data: { slideId: number; slide: Slide; userId: string }) => {
-      // Don't update if it's our own change
-      const currentUser = collaborationManager.getCurrentUser();
-      if (data.userId === currentUser?.id) return;
-
-      setSlides(prev => {
-        const existingIndex = prev.findIndex(s => s.id === data.slideId);
-        if (existingIndex >= 0) {
-          const newSlides = [...prev];
-          newSlides[existingIndex] = data.slide;
-          return newSlides;
-        } else {
-          return [...prev, data.slide];
-        }
-      });
-    };
-
-    const handleBlockUpdated = (data: { slideId: number; blockId: number; block: Block; userId: string }) => {
-      // Don't update if it's our own change
-      const currentUser = collaborationManager.getCurrentUser();
-      if (data.userId === currentUser?.id) return;
-
-      setSlides(prev => prev.map(slide => 
-        slide.id === data.slideId 
-          ? {
-              ...slide,
-              blocks: slide.blocks.map(b => 
-                b.id === data.blockId ? data.block : b
-              )
-            }
-          : slide
-      ));
-    };
-
-    collaborationManager.on('slide_updated', handleSlideUpdated);
-    collaborationManager.on('block_updated', handleBlockUpdated);
-
-    return () => {
-      collaborationManager.off('slide_updated', handleSlideUpdated);
-      collaborationManager.off('block_updated', handleBlockUpdated);
-    };
-  }, [collaborationReady, isCollaborationEnabled]);
-
-  // Auto-join collaboration
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    
-    if (isCollaborationEnabled && !collaborationReady && !autoJoinAttempted) {
-      setAutoJoinAttempted(true);
-      
-      const autoJoin = async () => {
-        try {
-          const collaborationManager = getCollaborationManager();
-          
-          // Generate or get a stored project ID
-          let projectId = localStorage.getItem('cc_project_id');
-          if (!projectId) {
-            projectId = `PROJECT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-            localStorage.setItem('cc_project_id', projectId);
-          }
-          
-          // Generate a random user name or get stored one
-          let userName = localStorage.getItem('cc_user_name');
-          if (!userName) {
-            const names = ['Alex', 'Jordan', 'Casey', 'Riley', 'Taylor', 'Morgan', 'Jamie', 'Avery'];
-            userName = names[Math.floor(Math.random() * names.length)];
-            localStorage.setItem('cc_user_name', userName);
-          }
-          
-          await collaborationManager.joinProject(projectId, {
-            name: userName,
-            email: `${userName.toLowerCase()}@demo.com`,
-          });
-          
-          setCollaborationReady(true);
-          console.log(`Auto-joined collaboration as ${userName} in project ${projectId}`);
-        } catch (error) {
-          console.error('Failed to auto-join collaboration:', error);
-          // Retry after 2 seconds if it fails
-          setTimeout(() => {
-            setAutoJoinAttempted(false);
-          }, 2000);
-        }
-      };
-      
-      // Small delay to ensure page is loaded
-      setTimeout(autoJoin, 1500);
-    }
-  }, [isCollaborationEnabled, collaborationReady, autoJoinAttempted]);
 
   // Debounced save to localStorage
   useEffect(() => {
@@ -555,7 +494,7 @@ export default function ContentCreatorPage() {
       }
 
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.contentEditable === 'true' || target.isContentEditable) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.contentEditable === 'true') {
         return;
       }
 
@@ -642,8 +581,10 @@ export default function ContentCreatorPage() {
             e.preventDefault();
             selectedIds.forEach(id => {
               const currentBlock = blocks.find(b => b.id === id);
-              const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant || 'normal');
+              if (currentBlock?.type === "text") {
+                const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant as TextVariant || 'normal');
               updateBlockInSlide(id, { fontSize: Math.min(96, currentSize + 2) });
+              }
             });
             break;
 
@@ -651,8 +592,10 @@ export default function ContentCreatorPage() {
             e.preventDefault();
             selectedIds.forEach(id => {
               const currentBlock = blocks.find(b => b.id === id);
-              const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant || 'normal');
+              if (currentBlock?.type === "text") {
+                const currentSize = currentBlock?.fontSize ?? defaultFontSize(currentBlock?.variant as TextVariant || 'normal');
               updateBlockInSlide(id, { fontSize: Math.max(10, currentSize - 2) });
+              }
             });
             break;
 
@@ -704,6 +647,7 @@ export default function ContentCreatorPage() {
           setSelectedSlideIds([]);
           setEditingId(null);
           setTextPlacementMode(null);
+          setShapePlacementMode(null);
           setResizingId(null);
           break;
 
@@ -759,24 +703,6 @@ export default function ContentCreatorPage() {
               setSelectedIds(blocks.map(b => b.id));
               setSelectedSlideIds([]);
             }
-          } else {
-            // 'A' key: Return to normal mode
-            e.preventDefault();
-            setCommentMode(false);
-            setTextPlacementMode(null);
-            setSelectedIds([]);
-            setSelectedSlideIds([]);
-          }
-          break;
-          
-        case 'c':
-          if (!isCmd) {
-            // 'C' key: Enter comment mode
-            e.preventDefault();
-            setCommentMode(true);
-            setTextPlacementMode(null);
-            setSelectedIds([]);
-            setSelectedSlideIds([]);
           }
           break;
       }
@@ -790,41 +716,34 @@ export default function ContentCreatorPage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    // Set up draggables for all blocks (kill existing ones first)
     blocks.forEach((b) => {
       const el = document.getElementById(`block-${b.id}`);
       if (!el) return;
       
-      // Kill any existing draggable instance
-      const existingDraggable = Draggable.get(el);
-      if (existingDraggable) {
-        existingDraggable.kill();
-      }
+      // Kill existing draggable instance
+      Draggable.get(el)?.kill();
       
       // Create new draggable instance
       Draggable.create(el, {
         type: "x,y",
         bounds: canvas,
         inertia: false,
-        minimumMovement: 2, // Small threshold for dragging
-        dragClickables: false,
-        allowEventDefault: true,
-        onPress(e: unknown) {
-          // Handle selection on mouse down; ignore when editing text
-          type WithOriginalEvent = { originalEvent: Event };
-          const hasOriginal = (val: unknown): val is WithOriginalEvent => (
-            typeof val === 'object' && val !== null && 'originalEvent' in val
-          );
-          const ev: Event = hasOriginal(e) ? e.originalEvent : (e as Event);
-          const target = (ev.target as HTMLElement | null);
-
-          // If clicking on editable text, cancel drag entirely
-          if (target && (target.isContentEditable || target.contentEditable === 'true')) {
-            (this as unknown as { endDrag: () => void }).endDrag();
-            return;
+        minimumMovement: 3, // Lower threshold for smoother click-to-drag
+        dragClickables: true,
+        onPress(e) {
+          const ev = (e && ((e as any).originalEvent || e)) as any;
+          ev?.preventDefault?.();
+          ev?.stopPropagation?.();
+          // This fires immediately on mouse down - handle selection here
+          // Only handle normal clicks (modifier keys are handled by React onMouseDown)
+          const event = ev;
+          if (!event.metaKey && !event.ctrlKey && !event.shiftKey) {
+            setSelectedIds([b.id]);
+            setSelectedSlideIds([]);
+            setEditingId(null);
+            setTextPlacementMode(null);
+            setShapePlacementMode(null);
           }
-
-
         },
         onDragStart() {
           // Ensure block is selected when drag actually starts
@@ -833,6 +752,7 @@ export default function ContentCreatorPage() {
             setSelectedSlideIds([]);
             setEditingId(null);
             setTextPlacementMode(null);
+            setShapePlacementMode(null);
           }
         },
         onDrag() {
@@ -887,18 +807,18 @@ export default function ContentCreatorPage() {
         },
       });
       
-      // Set initial position using GSAP transforms
+      // Set initial position
       gsap.set(el, { x: b.x, y: b.y });
     });
     
     return () => {
       blocks.forEach((b) => Draggable.get(`#block-${b.id}`)?.kill());
     };
-  }, [blocks, saveToHistory, updateBlockInSlide]);
+  }, [blocks, selectedIds, saveToHistory, updateBlockInSlide]);
 
   // GSAP Draggable for slide reordering
   useEffect(() => {
-    if (sidebarCollapsed || slides.length <= 1) return;
+    if (slides.length <= 1) return;
 
     const slideElements = slides.map(slide => document.getElementById(`slide-${slide.id}`)).filter(Boolean);
     
@@ -983,140 +903,80 @@ export default function ContentCreatorPage() {
         if (el) Draggable.get(el)?.kill();
       });
     };
-  }, [slides, sidebarCollapsed, reorderSlides]);
+  }, [slides, reorderSlides]);
 
-  // GSAP Draggable for resize handles  
+  // GSAP Draggable for resize handles (pre-initialize for selected block)
   useEffect(() => {
-    // Set up resize handles for selected blocks (only when exactly one is selected)
-    if (selectedIds.length !== 1) return;
-    
-    const blockId = selectedIds[0];
-    const block = blocks.find(b => b.id === blockId);
+    const selectedBlockId = selectedIds.length === 1 ? selectedIds[0] : null;
+    if (!selectedBlockId) return;
+
+    const block = blocks.find(b => b.id === selectedBlockId);
     if (!block) return;
 
-    const blockElement = document.getElementById(`block-${blockId}`);
-    const textElement = document.getElementById(`text-${blockId}`);
-    if (!blockElement || !textElement) return;
+    const blockElement = document.getElementById(`block-${selectedBlockId}`);
+    const contentElement = block.type === 'text' ? document.getElementById(`text-${selectedBlockId}`) : document.getElementById(`shape-${selectedBlockId}`);
+    if (!blockElement || !contentElement) return;
 
-    // Clean up any existing draggables on handles
     const handles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
-    handles.forEach(direction => {
-      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
-      if (handle) {
-        Draggable.get(handle)?.kill();
-      }
-    });
+    const cleaners: Array<() => void> = [];
 
-    // Set up new draggables for each handle
     handles.forEach(direction => {
-      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
+      const handle = blockElement.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement | null;
       if (!handle) return;
 
-      Draggable.create(handle, {
-        type: "x,y",
-        trigger: handle,
-        onPress() {
-          setResizingId(blockId);
+      Draggable.get(handle)?.kill();
+
+      let initialWidth = 0, initialHeight = 0, initialX = 0, initialY = 0;
+      const instance = Draggable.create(handle, {
+        type: 'x,y',
+        dragClickables: true,
+        onPress(e) {
+          const ev = (e && ((e as any).originalEvent || e)) as any;
+          ev?.preventDefault?.();
+          ev?.stopPropagation?.();
+          initialWidth = block.width || contentElement.offsetWidth || 200;
+          initialHeight = block.height || contentElement.offsetHeight || 50;
+          initialX = block.x;
+          initialY = block.y;
         },
         onDrag() {
-          const currentBlock = blocks.find(b => b.id === blockId);
-          if (!currentBlock) return;
-
           const { x: dragX, y: dragY } = this as unknown as { x: number; y: number };
-          
-          // Get initial dimensions
-          const initialWidth = currentBlock.width || 250;
-          const initialHeight = currentBlock.height || 40;
-          
           let newWidth = initialWidth;
           let newHeight = initialHeight;
-          let deltaX = 0;
-          let deltaY = 0;
-
-          // Calculate new dimensions based on handle direction
+          let newX = initialX;
+          let newY = initialY;
           switch (direction) {
-            case 'e': // East - right edge
-              newWidth = Math.max(80, initialWidth + dragX);
-              break;
-            case 'w': // West - left edge  
-              newWidth = Math.max(80, initialWidth - dragX);
-              deltaX = Math.min(dragX, initialWidth - 80);
-              break;
-            case 's': // South - bottom edge
-              newHeight = Math.max(30, initialHeight + dragY);
-              break;
-            case 'n': // North - top edge
-              newHeight = Math.max(30, initialHeight - dragY);
-              deltaY = Math.min(dragY, initialHeight - 30);
-              break;
-            case 'se': // Southeast - bottom right
-              newWidth = Math.max(80, initialWidth + dragX);
-              newHeight = Math.max(30, initialHeight + dragY);
-              break;
-            case 'sw': // Southwest - bottom left
-              newWidth = Math.max(80, initialWidth - dragX);
-              newHeight = Math.max(30, initialHeight + dragY);
-              deltaX = Math.min(dragX, initialWidth - 80);
-              break;
-            case 'ne': // Northeast - top right
-              newWidth = Math.max(80, initialWidth + dragX);
-              newHeight = Math.max(30, initialHeight - dragY);
-              deltaY = Math.min(dragY, initialHeight - 30);
-              break;
-            case 'nw': // Northwest - top left
-              newWidth = Math.max(80, initialWidth - dragX);
-              newHeight = Math.max(30, initialHeight - dragY);
-              deltaX = Math.min(dragX, initialWidth - 80);
-              deltaY = Math.min(dragY, initialHeight - 30);
-              break;
+            case 'e': newWidth = Math.max(80, initialWidth + dragX); break;
+            case 'w': newWidth = Math.max(80, initialWidth - dragX); newX = initialX + (initialWidth - newWidth); break;
+            case 's': newHeight = Math.max(30, initialHeight + dragY); break;
+            case 'n': newHeight = Math.max(30, initialHeight - dragY); newY = initialY + (initialHeight - newHeight); break;
+            case 'se': newWidth = Math.max(80, initialWidth + dragX); newHeight = Math.max(30, initialHeight + dragY); break;
+            case 'sw': newWidth = Math.max(80, initialWidth - dragX); newHeight = Math.max(30, initialHeight + dragY); newX = initialX + (initialWidth - newWidth); break;
+            case 'ne': newWidth = Math.max(80, initialWidth + dragX); newHeight = Math.max(30, initialHeight - dragY); newY = initialY + (initialHeight - newHeight); break;
+            case 'nw': newWidth = Math.max(80, initialWidth - dragX); newHeight = Math.max(30, initialHeight - dragY); newX = initialX + (initialWidth - newWidth); newY = initialY + (initialHeight - newHeight); break;
           }
-
-          // Apply live updates (size only; do not translate the block)
-          textElement.style.width = `${newWidth}px`;
-          textElement.style.height = `${newHeight}px`;
+          gsap.set(contentElement, { width: newWidth, height: newHeight, minWidth: newWidth, minHeight: newHeight });
+          if (newX !== initialX || newY !== initialY) gsap.set(blockElement, { x: newX, y: newY });
         },
         onDragEnd() {
-          const currentBlock = blocks.find(b => b.id === blockId);
-          if (!currentBlock) return;
-
-          // Get final dimensions only (position unchanged)
-          const finalWidth = parseFloat(textElement.style.width) || currentBlock.width || 250;
-          const finalHeight = parseFloat(textElement.style.height) || currentBlock.height || 40;
-          
-          // Update the block state (no x/y change)
+          const rect = contentElement.getBoundingClientRect();
+          const blockX = gsap.getProperty(blockElement, 'x') as number;
+          const blockY = gsap.getProperty(blockElement, 'y') as number;
           saveToHistory();
-          updateBlockInSlide(blockId, {
-            width: finalWidth,
-            height: finalHeight
-          });
-          
-          // Reset handle position
-          gsap.set(handle, { x: 0, y: 0 });
-          setResizingId(null);
+          updateBlockInSlide(selectedBlockId, { width: rect.width, height: rect.height, x: blockX, y: blockY });
+          gsap.set(this.target, { x: 0, y: 0 });
         }
       });
+      cleaners.push(() => instance[0]?.kill());
     });
 
-    return () => {
-      // Cleanup on unmount or dependency change
-      handles.forEach(direction => {
-        const handle = blockElement?.querySelector(`[data-resize-handle="${direction}"]`) as HTMLElement;
-        if (handle) {
-          Draggable.get(handle)?.kill();
-        }
-      });
-    };
+    return () => cleaners.forEach(c => c());
   }, [selectedIds, blocks, saveToHistory, updateBlockInSlide]);
 
   return (
     <div className="flex min-h-dvh flex-col">
-      {/* Conflict Resolution */}
-      {collaborationReady && isCollaborationEnabled && (
-        <ConflictResolution />
-      )}
-
-      <header className="border-b">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2">
+      <header className="bg-white/80 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2 relative">
           {editingTitle ? (
             <Input 
               value={title} 
@@ -1143,91 +1003,40 @@ export default function ContentCreatorPage() {
               {title || "Click to set title"}
             </h1>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            {/* Save Status Indicator */}
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              {saveStatus === 'saving' && (
-                <>
-                  <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-                  <span>Saving...</span>
-                </>
-              )}
-              {saveStatus === 'saved' && (
-                <>
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span>Saved</span>
-                </>
-              )}
-              {saveStatus === 'error' && (
-                <>
-                  <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                  <span>Error saving</span>
-                </>
-              )}
-            </div>
-            
-            {/* User Avatars */}
-            {collaborationReady && isCollaborationEnabled && (
-              <UserAvatars 
-                position="header" 
-                showSlideIndicator 
-                currentSlideId={currentSlideId} 
-              />
-            )}
-            
-            {!gridView && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline">Text</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onClick={() => addText("title")} className="text-4xl font-bold py-3">Title</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("headline")} className="text-2xl font-semibold py-2">Headline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("subheadline")} className="text-lg font-medium py-1">Subheadline</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("normal")} className="text-base">Normal text</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("small")} className="text-sm">Small text</DropdownMenuItem>
-                  <Separator className="my-1" />
-                  <DropdownMenuItem onClick={() => addText("bullet")} className="text-base font-normal">• Bullet list</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => addText("number")} className="text-base font-normal">1. Number list</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+          {/* Tool bar (center floating pill) */}
+          <ToolBarComp gridView={gridView} addTextNow={addTextNow} addShape={addShape} />
 
-            <Button 
-              variant={collaborationReady ? "default" : "outline"}
-              onClick={() => {
-                if (isCollaborationEnabled && collaborationReady) {
-                  // Leave collaboration when disabled
-                  const collaborationManager = getCollaborationManager();
-                  collaborationManager.leaveProject();
-                  setCollaborationReady(false);
-                  setIsCollaborationEnabled(false);
-                  setAutoJoinAttempted(false);
-                } else {
-                  // Re-enable collaboration
-                  setIsCollaborationEnabled(true);
-                  setAutoJoinAttempted(false);
-                }
-              }}
-              className="text-xs"
-              title={collaborationReady ? `Project: ${typeof window !== 'undefined' ? localStorage.getItem('cc_project_id') || 'Unknown' : 'Unknown'}` : 'Click to enable collaboration'}
-            >
-              {collaborationReady ? `Live: ${typeof window !== 'undefined' ? localStorage.getItem('cc_user_name') || 'User' : 'User'}` : "Collaboration Off"}
-            </Button>
-            <Button variant="ghost">Play</Button>
-            <Button variant="ghost">Share</Button>
-            <Button>Publish</Button>
+          <div className="ml-auto flex items-center gap-2">
+            {/* Save Status Indicator (only show when NOT saved) */}
+            {saveStatus !== 'saved' && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                {saveStatus === 'saving' && (
+                  <>
+                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                    <span>Saving…</span>
+                  </>
+                )}
+                {saveStatus === 'error' && (
+                  <>
+                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                    <span>Error saving</span>
+                  </>
+                )}
+              </div>
+            )}
+            <Button>Preview</Button>
+            <Button variant="outline">Share</Button>
           </div>
         </div>
       </header>
 
       {gridView ? (
-        <div className="flex-1 p-6 overflow-auto bg-muted/20">
+        <div className="flex-1 p-6 overflow-auto bg-gray-50/30">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 max-w-7xl mx-auto">
             {slides.map((slide) => (
               <div
                 key={slide.id}
-                className={`group relative aspect-video rounded-lg border bg-white cursor-pointer transition-all hover:shadow-lg ${
+                className={`group relative aspect-video rounded-lg bg-white shadow-sm cursor-pointer transition-all hover:shadow-lg ${
                   slide.id === currentSlideId 
                     ? 'ring-2 ring-primary' 
                     : selectedSlideIds.includes(slide.id)
@@ -1254,7 +1063,7 @@ export default function ContentCreatorPage() {
                 }}
               >
                 <div className="absolute inset-0 p-2 overflow-hidden">
-                  <div className="h-full w-full bg-white rounded border-2 border-gray-100 relative">
+                  <div className="h-full w-full bg-gray-50/50 rounded relative">
                     {/* Mini preview of blocks */}
                     {slide.blocks.map((block) => (
                       <div
@@ -1266,7 +1075,7 @@ export default function ContentCreatorPage() {
                           fontSize: Math.max(6, (block.fontSize || 16) / 8),
                         }}
                       >
-                        {block.text.substring(0, 20)}
+                        {block.type === "text" ? block.text?.substring(0, 20) : block.variant}
                       </div>
                     ))}
                   </div>
@@ -1274,14 +1083,6 @@ export default function ContentCreatorPage() {
                 <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/50 to-transparent rounded-b-lg">
                   <p className="text-xs font-medium text-white truncate">{slide.title}</p>
                 </div>
-                
-                {/* Grid View Slide Avatars */}
-                {collaborationReady && isCollaborationEnabled && (
-                  <UserAvatars 
-                    position="slide" 
-                    slideId={slide.id} 
-                  />
-                )}
                 {slides.length > 1 && (
                   <Button
                     size="sm"
@@ -1299,7 +1100,7 @@ export default function ContentCreatorPage() {
             ))}
             {/* Add new slide card */}
             <div
-              className="aspect-video rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/10 cursor-pointer transition-all hover:bg-muted/20 flex items-center justify-center"
+              className="aspect-video rounded-lg bg-white/60 shadow-sm cursor-pointer transition-all hover:shadow-md flex items-center justify-center border-2 border-dashed border-gray-200"
               onClick={addSlide}
             >
               <div className="text-center">
@@ -1310,30 +1111,20 @@ export default function ContentCreatorPage() {
           </div>
         </div>
       ) : (
-        <div className={`grid flex-1 overflow-hidden ${
-          sidebarCollapsed 
-            ? 'grid-cols-[40px_1fr_200px] lg:grid-cols-[40px_1fr_280px] xl:grid-cols-[40px_1fr_320px]' 
-            : 'grid-cols-[200px_1fr_200px] lg:grid-cols-[260px_1fr_280px] xl:grid-cols-[300px_1fr_320px]'
-        }`}>
-        <aside className="border-r p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            {!sidebarCollapsed && <p className="text-xs text-muted-foreground">Slides</p>}
+        <div className="grid flex-1 overflow-hidden grid-cols-[200px_1fr_200px] lg:grid-cols-[260px_1fr_280px] xl:grid-cols-[300px_1fr_320px]">
+        <aside className="bg-gray-50/50 p-4 space-y-3">
             <Button 
               size="sm" 
-              variant="ghost" 
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="h-6 w-6 p-0"
-            >
-              {sidebarCollapsed ? '→' : '←'}
+            variant="outline" 
+            onClick={addSlide}
+            className="w-full flex items-center gap-2"
+          >
+            <span className="text-lg">+</span>
+            Add slide
             </Button>
-            {!sidebarCollapsed && (
-              <Button size="sm" variant="ghost" onClick={addSlide}>+</Button>
-            )}
-          </div>
-          {!sidebarCollapsed && <div className="space-y-2">
+          <div className="space-y-2">
             {slides.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-32 text-center border-2 border-dashed border-muted-foreground/25 rounded-lg">
+              <div className="flex flex-col items-center justify-center h-32 text-center bg-white/60 rounded-lg">
                 <p className="text-sm text-muted-foreground mb-2">No slides</p>
                 <Button size="sm" onClick={addSlide} variant="outline">
                   Create First Slide
@@ -1344,7 +1135,7 @@ export default function ContentCreatorPage() {
               <div
                 key={slide.id}
                 id={`slide-${slide.id}`}
-                className={`group relative h-24 w-full rounded-lg border bg-card cursor-pointer transition-all ${
+                className={`group relative h-24 w-full rounded-lg bg-white shadow-sm cursor-pointer transition-all hover:shadow-md ${
                   slide.id === currentSlideId 
                     ? 'ring-2 ring-primary' 
                     : selectedSlideIds.includes(slide.id)
@@ -1382,14 +1173,6 @@ export default function ContentCreatorPage() {
                 <div className="p-2">
                   <p className="text-xs font-medium truncate">{slide.title}</p>
                 </div>
-                
-                {/* Slide Avatars */}
-                {collaborationReady && isCollaborationEnabled && (
-                  <UserAvatars 
-                    position="slide" 
-                    slideId={slide.id} 
-                  />
-                )}
                 {slides.length > 1 && (
                   <Button
                     size="sm"
@@ -1406,25 +1189,16 @@ export default function ContentCreatorPage() {
               </div>
               ))
             )}
-          </div>}
+          </div>
         </aside>
 
-        <main className="relative overflow-auto">
-          <div className="border-b p-2" />
+        <main className="relative overflow-auto bg-gray-50/50">
           <div 
-            className="flex h-[calc(100%-2.5rem)] items-center justify-center p-6" 
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) {
-                setSelectedIds([]);
-                setSelectedSlideIds([]);
-                setEditingId(null);
-                setTextPlacementMode(null);
-              }
-            }}
+            className="flex h-full items-center justify-center p-6" 
             tabIndex={-1}
           >
             {slides.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded border border-dashed border-muted-foreground/25 bg-muted/10" style={{aspectRatio: '16/9'}}>
+              <div className="flex flex-col items-center justify-center h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded-lg bg-white/60 shadow-sm" style={{aspectRatio: '16/9'}}>
                 <p className="text-lg text-muted-foreground mb-4">No slides to edit</p>
                 <Button onClick={addSlide} variant="outline">
                   Create Your First Slide
@@ -1434,27 +1208,31 @@ export default function ContentCreatorPage() {
               <div 
                 ref={canvasRef} 
                 id="canvas" 
-                className={`relative h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded border bg-white outline-none ${
-                  commentMode ? 'cursor-help' : textPlacementMode ? 'cursor-crosshair' : 'cursor-default'
+                className={`relative h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded-lg shadow-lg outline-none ${
+                  textPlacementMode || shapePlacementMode ? 'cursor-crosshair' : 'cursor-default'
+                } ${
+                  currentSlide?.background?.type === "gradient" 
+                    ? `bg-gradient-${currentSlide.background.gradientDirection || 'to-br'}` 
+                    : currentSlide?.background?.type === "solid" 
+                      ? '' 
+                      : 'bg-white'
                 }`} 
                 tabIndex={0}
-                style={{aspectRatio: '16/9'}}
+                style={{
+                  aspectRatio: '16/9',
+                  backgroundColor: currentSlide?.background?.type === "solid" ? currentSlide.background.color : undefined,
+                  backgroundImage: currentSlide?.background?.type === "image" && currentSlide.background.imageUrl 
+                    ? `url(${currentSlide.background.imageUrl})` 
+                    : currentSlide?.background?.type === "gradient"
+                      ? `linear-gradient(${currentSlide.background.gradientDirection || 'to bottom right'}, ${currentSlide.background.gradientStart || '#3b82f6'}, ${currentSlide.background.gradientEnd || '#1e40af'})`
+                      : undefined,
+                  backgroundSize: currentSlide?.background?.type === "image" ? 'cover' : undefined,
+                  backgroundPosition: currentSlide?.background?.type === "image" ? 'center' : undefined,
+                  backgroundRepeat: currentSlide?.background?.type === "image" ? 'no-repeat' : undefined,
+                }}
               onMouseDown={(e) => {
                 // Ensure canvas is focused for keyboard shortcuts
                 e.currentTarget.focus();
-                
-                if (commentMode) {
-                  // In comment mode, clicking adds a comment
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const x = e.clientX - rect.left;
-                  const y = e.clientY - rect.top;
-                  
-                  if (collaborationReady && isCollaborationEnabled) {
-                    const collaborationManager = getCollaborationManager();
-                    collaborationManager.addComment(currentSlideId, x, y, 'Click to edit this comment...');
-                  }
-                  return;
-                }
                 
                 if (textPlacementMode) {
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -1462,7 +1240,17 @@ export default function ContentCreatorPage() {
                   const y = e.clientY - rect.top;
                   const newBlockId = addText(textPlacementMode, x, y);
                   setTextPlacementMode(null);
+            setShapePlacementMode(null);
                   setTimeout(() => setEditingId(newBlockId), 50);
+                  return;
+                }
+
+                if (shapePlacementMode) {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const y = e.clientY - rect.top;
+                  const newBlockId = addShape(shapePlacementMode, x, y);
+                  setShapePlacementMode(null);
                   return;
                 }
 
@@ -1488,29 +1276,6 @@ export default function ContentCreatorPage() {
               }}
 
             >
-              {/* Collaboration Components */}
-              {collaborationReady && isCollaborationEnabled && (
-                <>
-                  <UserCursors canvasRef={canvasRef} />
-                  <Comments currentSlideId={currentSlideId} canvasRef={canvasRef} />
-                </>
-              )}
-              
-              {/* Mode indicators */}
-              {commentMode && (
-                <div className="absolute top-4 left-4 bg-blue-600 text-white text-sm px-3 py-2 rounded-lg pointer-events-auto font-medium z-50">
-                  💬 Comment Mode - Click to add comments, press &apos;A&apos; to exit
-                </div>
-              )}
-              
-              {textPlacementMode && (
-                <div className="absolute top-4 left-4 bg-green-600 text-white text-sm px-3 py-2 rounded-lg pointer-events-auto font-medium z-50">
-                  ✏️ Text Mode - Click to place {textPlacementMode}, press &apos;A&apos; to exit
-                </div>
-              )}
-              
-
-
               {/* Marquee selection rectangle */}
               {marqueeSelection.isActive && (
                 <div
@@ -1529,41 +1294,30 @@ export default function ContentCreatorPage() {
                 <div
                   id={`block-${b.id}`}
                   key={b.id}
-                  className={`absolute rounded bg-white/90 shadow-xs ${selectedIds.includes(b.id) ? "ring-2 ring-primary" : "ring-1 ring-transparent"}`}
-                  style={{ 
-                    left: 0, 
-                    top: 0, 
-                    zIndex: b.zIndex || 0
-                  }}
+                  className={`absolute cursor-move rounded-md ${b.type === 'shape' ? 'bg-transparent' : 'bg-white/95'} ${selectedIds.includes(b.id) ? "ring-2 ring-primary shadow-md" : ""}`}
+                  style={{ left: 0, top: 0, zIndex: b.zIndex || 0 }}
                   onMouseDown={(e) => {
-                    if (textPlacementMode) return;
-                    
+                    if (textPlacementMode || shapePlacementMode) return;
                     // Ensure canvas stays focused for keyboard shortcuts
                     const canvas = canvasRef.current;
                     if (canvas) canvas.focus();
-                    
+                    // Always stop propagation so canvas handlers don't interfere with drag
+                    e.stopPropagation();
+                    // For multi-select modifiers, handle here
                     if (e.metaKey || e.ctrlKey) {
-                      e.stopPropagation();
-                      setSelectedIds(prev => 
-                        prev.includes(b.id) 
-                          ? prev.filter(id => id !== b.id)
-                          : [...prev, b.id]
-                      );
+                      setSelectedIds(prev => (
+                        prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id]
+                      ));
                     } else if (e.shiftKey) {
-                      e.stopPropagation();
-                      setSelectedIds(prev => 
+                      setSelectedIds(prev => (
                         prev.includes(b.id) ? prev : [...prev, b.id]
-                      );
-                    } else {
-                      // Single click selects this block, allow GSAP to also handle drag
-                      setSelectedIds([b.id]);
-                      setSelectedSlideIds([]);
-                      setEditingId(null);
+                      ));
                     }
+                    // For normal clicks, let GSAP Draggable onPress/select and drag run
                   }}
                 >
-                  {/* Text formatting toolbar */}
-                  {editingId === b.id && (
+                  {/* Text formatting toolbar - only show for text blocks */}
+                  {editingId === b.id && b.type === "text" && (
                     <div className="absolute -top-12 left-0 bg-white border rounded-lg shadow-lg px-2 py-1 flex items-center gap-1 z-50">
                       <Button
                         size="sm"
@@ -1598,25 +1352,23 @@ export default function ContentCreatorPage() {
                     </div>
                   )}
                   
+                  {/* Render text blocks */}
+                  {b.type === "text" && (
                   <div
                     id={`text-${b.id}`}
-                    className={`whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant]} overflow-hidden resize-none`}
+                      className={`min-w-[80px] whitespace-pre-wrap px-3 py-2 ${variantToClasses[b.variant as TextVariant]}`}
                     contentEditable={editingId === b.id}
                     suppressContentEditableWarning
                     style={{ 
                       fontSize: b.fontSize, 
                       fontWeight: b.bold ? 700 : undefined, 
-                      cursor: editingId === b.id ? "text" : "inherit",
+                      cursor: editingId === b.id ? "text" : "move",
                       userSelect: editingId === b.id ? "text" : "none",
                       color: b.color || "#000000",
-                      width: b.width ? `${b.width}px` : '250px',
-                      height: b.height ? `${b.height}px` : 'auto',
-                      minWidth: '80px',
-                      minHeight: '30px',
-                      boxSizing: 'border-box',
-                      wordWrap: 'break-word',
-                      overflowWrap: 'break-word',
-                      pointerEvents: editingId === b.id ? 'auto' : 'none' // Important: prevent drag conflicts
+                      width: b.width || 'auto',
+                      height: b.height || 'auto',
+                      minWidth: b.width ? `${b.width}px` : '80px',
+                      minHeight: b.height ? `${b.height}px` : 'auto'
                     }}
                     onBlur={(e) => {
                       const text = (e.currentTarget as HTMLElement).textContent || "";
@@ -1648,18 +1400,7 @@ export default function ContentCreatorPage() {
                       if (e.key !== "Enter") return;
                       if (b.variant === "bullet") {
                         e.preventDefault();
-                        // Modern way to insert text without execCommand
-                        const selection = window.getSelection();
-                        if (selection && selection.rangeCount > 0) {
-                          const range = selection.getRangeAt(0);
-                          range.deleteContents();
-                          const textNode = document.createTextNode("\n• ");
-                          range.insertNode(textNode);
-                          range.setStartAfter(textNode);
-                          range.setEndAfter(textNode);
-                          selection.removeAllRanges();
-                          selection.addRange(range);
-                        }
+                        document.execCommand("insertText", false, "\n• ");
                       } else if (b.variant === "number") {
                         e.preventDefault();
                         const txt = (e.currentTarget as HTMLElement).textContent || "";
@@ -1668,63 +1409,104 @@ export default function ContentCreatorPage() {
                           .map((line) => parseInt((line.match(/^(\d+)\./)?.[1] as string) || "0", 10))
                           .filter((n) => n > 0);
                         const next = nums.length ? Math.max(...nums) + 1 : (txt.split("\n").length || 0) + 1;
-                        // Modern way to insert text without execCommand
-                        const selection = window.getSelection();
-                        if (selection && selection.rangeCount > 0) {
-                          const range = selection.getRangeAt(0);
-                          range.deleteContents();
-                          const textNode = document.createTextNode(`\n${next}. `);
-                          range.insertNode(textNode);
-                          range.setStartAfter(textNode);
-                          range.setEndAfter(textNode);
-                          selection.removeAllRanges();
-                          selection.addRange(range);
-                        }
+                        document.execCommand("insertText", false, `\n${next}. `);
                       }
                     }}
                   >
                     {b.text}
                   </div>
+                  )}
+
+                  {/* Render shape blocks */}
+                  {b.type === "shape" && (
+                    <div
+                      id={`shape-${b.id}`}
+                      className="pointer-events-none"
+                      style={{
+                        width: b.width || 120,
+                        height: b.height || 80,
+                      }}
+                    >
+                      <svg
+                        width="100%"
+                        height="100%"
+                        viewBox={`0 0 ${b.width || 120} ${b.height || 80}`}
+                        className="pointer-events-none"
+                      >
+                        {b.variant === "rectangle" && (
+                          <rect
+                            x={b.strokeWidth || 1}
+                            y={b.strokeWidth || 1}
+                            width={(b.width || 120) - 2 * (b.strokeWidth || 1)}
+                            height={(b.height || 80) - 2 * (b.strokeWidth || 1)}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "circle" && (
+                          <ellipse
+                            cx={(b.width || 120) / 2}
+                            cy={(b.height || 80) / 2}
+                            rx={(b.width || 120) / 2 - (b.strokeWidth || 1)}
+                            ry={(b.height || 80) / 2 - (b.strokeWidth || 1)}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "triangle" && (
+                          <polygon
+                            points={`${(b.width || 120) / 2},${b.strokeWidth || 1} ${(b.strokeWidth || 1)},${(b.height || 80) - (b.strokeWidth || 1)} ${(b.width || 120) - (b.strokeWidth || 1)},${(b.height || 80) - (b.strokeWidth || 1)}`}
+                            fill={b.fillColor || "#3b82f6"}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 1}
+                          />
+                        )}
+                        {b.variant === "line" && (
+                          <line
+                            x1={0}
+                            y1={(b.height || 2) / 2}
+                            x2={b.width || 100}
+                            y2={(b.height || 2) / 2}
+                            stroke={b.strokeColor || "#1e40af"}
+                            strokeWidth={b.strokeWidth || 2}
+                          />
+                        )}
+                      </svg>
+                    </div>
+                  )}
                   
                   {/* Resize handles - only show for selected blocks */}
                   {selectedIds.includes(b.id) && selectedIds.length === 1 && (
                     <>
-
-                      {/* Corner handles */}
-                      <div className="absolute -top-1 -left-1 w-4 h-4 bg-primary border border-white rounded-full cursor-nw-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                      {/* Corner handles - diagonal cursors */}
+                      <div className="absolute -top-1 -left-1 w-3 h-3 bg-primary border border-white rounded-full cursor-nw-resize" 
                            data-resize-handle="nw"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-primary border border-white rounded-full cursor-ne-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary border border-white rounded-full cursor-ne-resize" 
                            data-resize-handle="ne"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute -bottom-1 -left-1 w-4 h-4 bg-primary border border-white rounded-full cursor-sw-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute -bottom-1 -left-1 w-3 h-3 bg-primary border border-white rounded-full cursor-sw-resize" 
                            data-resize-handle="sw"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-primary border border-white rounded-full cursor-se-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-primary border border-white rounded-full cursor-se-resize" 
                            data-resize-handle="se"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
                       
-                      {/* Edge handles */}
-                      <div className="absolute -top-1 left-0 right-0 h-3 bg-transparent cursor-n-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                      {/* Edge handles - horizontal/vertical cursors */}
+                      <div className="absolute -top-1 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-n-resize" 
                            data-resize-handle="n"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute -bottom-1 left-0 right-0 h-3 bg-transparent cursor-s-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-s-resize" 
                            data-resize-handle="s"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute top-0 bottom-0 -left-1 w-3 bg-transparent cursor-w-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute top-1/2 -left-1 transform -translate-y-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-w-resize" 
                            data-resize-handle="w"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
-                      <div className="absolute top-0 bottom-0 -right-1 w-3 bg-transparent cursor-e-resize pointer-events-auto" 
-                           style={{ zIndex: 1000 }}
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
+                      <div className="absolute top-1/2 -right-1 transform -translate-y-1/2 w-3 h-3 bg-primary border border-white rounded-full cursor-e-resize" 
                            data-resize-handle="e"
-                           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }} />
+                           onMouseDown={(e) => { e.stopPropagation(); setResizingId(b.id); }} />
                     </>
                   )}
                 </div>
@@ -1732,11 +1514,158 @@ export default function ContentCreatorPage() {
               </div>
             )}
           </div>
-          <div className="border-t p-2 text-center text-xs text-muted-foreground">Private notes</div>
+
         </main>
 
-        <aside className="border-l p-3 space-y-4">
-          {/* Tools panel - reserved for future use */}
+        <aside className="bg-gray-50/50 p-4 space-y-4">
+          {/* Canvas/Slide Settings - show when no objects are selected */}
+          {selectedIds.length === 0 && currentSlide && (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium mb-3">{currentSlide.title}</h3>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">Background</p>
+                    <div className="flex gap-1 mb-3">
+                      <Button
+                        size="sm"
+                        variant={!currentSlide.background || currentSlide.background.type === "solid" ? "default" : "outline"}
+                        className="flex-1 h-8 p-1"
+                        onClick={() => updateSlideBackground(currentSlide.id, { type: "solid", color: "#ffffff" })}
+                      >
+                        <div className="w-4 h-4 bg-white border rounded"></div>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={currentSlide.background?.type === "gradient" ? "default" : "outline"}
+                        className="flex-1 h-8 p-1"
+                        onClick={() => updateSlideBackground(currentSlide.id, { 
+                          type: "gradient", 
+                          gradientStart: "#3b82f6", 
+                          gradientEnd: "#1e40af",
+                          gradientDirection: "to-br"
+                        })}
+                      >
+                        <div className="w-4 h-4 bg-gradient-to-br from-blue-500 to-blue-700 rounded"></div>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={currentSlide.background?.type === "image" ? "default" : "outline"}
+                        className="flex-1 h-8 p-1"
+                        onClick={() => updateSlideBackground(currentSlide.id, { type: "image" })}
+                      >
+                        <div className="w-4 h-4 bg-gray-200 border rounded flex items-center justify-center">
+                          <span className="text-[8px] text-gray-500">IMG</span>
+                        </div>
+                      </Button>
+                    </div>
+                    
+                    {/* Solid Color Options */}
+                    {(!currentSlide.background || currentSlide.background.type === "solid") && (
+                      <div className="space-y-2">
+                        <input
+                          type="color"
+                          value={currentSlide.background?.color || "#ffffff"}
+                          onChange={(e) => updateSlideBackground(currentSlide.id, { 
+                            type: "solid", 
+                            color: e.target.value 
+                          })}
+                          className="w-full h-8 border rounded cursor-pointer"
+                        />
+                      </div>
+                    )}
+                    
+                    {/* Gradient Options */}
+                    {currentSlide.background?.type === "gradient" && (
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <input
+                            type="color"
+                            value={currentSlide.background.gradientStart || "#3b82f6"}
+                            onChange={(e) => updateSlideBackground(currentSlide.id, { 
+                              ...currentSlide.background,
+                              type: "gradient",
+                              gradientStart: e.target.value 
+                            })}
+                            className="flex-1 h-8 border rounded cursor-pointer"
+                          />
+                          <input
+                            type="color"
+                            value={currentSlide.background.gradientEnd || "#1e40af"}
+                            onChange={(e) => updateSlideBackground(currentSlide.id, { 
+                              ...currentSlide.background,
+                              type: "gradient",
+                              gradientEnd: e.target.value 
+                            })}
+                            className="flex-1 h-8 border rounded cursor-pointer"
+                          />
+                        </div>
+                        <select
+                          value={currentSlide.background.gradientDirection || "to-br"}
+                          onChange={(e) => updateSlideBackground(currentSlide.id, { 
+                            ...currentSlide.background,
+                            type: "gradient",
+                            gradientDirection: e.target.value as any
+                          })}
+                          className="w-full h-8 border rounded px-2 text-sm"
+                        >
+                          <option value="to-r">Left to Right</option>
+                          <option value="to-l">Right to Left</option>
+                          <option value="to-t">Bottom to Top</option>
+                          <option value="to-b">Top to Bottom</option>
+                          <option value="to-br">Top-Left to Bottom-Right</option>
+                          <option value="to-bl">Top-Right to Bottom-Left</option>
+                          <option value="to-tr">Bottom-Left to Top-Right</option>
+                          <option value="to-tl">Bottom-Right to Top-Left</option>
+                        </select>
+                      </div>
+                    )}
+                    
+                    {/* Image Upload Options */}
+                    {currentSlide.background?.type === "image" && (
+                      <div className="space-y-2">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (e) => {
+                                updateSlideBackground(currentSlide.id, { 
+                                  type: "image", 
+                                  imageUrl: e.target?.result as string 
+                                });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className="w-full text-sm"
+                        />
+                        {currentSlide.background.imageUrl && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => updateSlideBackground(currentSlide.id, { type: "solid", color: "#ffffff" })}
+                            className="w-full"
+                          >
+                            Remove Image
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Object Settings - show when objects are selected */}
+          {selectedIds.length > 0 && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">Object settings will go here</p>
+            </div>
+          )}
         </aside>
         </div>
       )}
