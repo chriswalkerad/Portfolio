@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "dev:full": "concurrently \"npm run dev\" \"npm run socket\"",
+    "socket": "node server/socket.js",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

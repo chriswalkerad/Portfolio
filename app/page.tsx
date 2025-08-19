@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { Home, Menu } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -13,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { ToolBar as ToolBarComp } from "@/components/ToolBar";
 import gsap from "gsap";
 import Draggable from "gsap/Draggable";
+import Flip from "gsap/Flip";
 
 
 type TextVariant = "title" | "headline" | "subheadline" | "normal" | "small" | "bullet" | "number";
@@ -81,7 +84,7 @@ const defaultFontSize = (v: TextVariant) =>
     number: 16,
   } as const)[v];
 
-gsap.registerPlugin(Draggable);
+gsap.registerPlugin(Draggable, Flip);
 
 // Removed inline ToolBar in favor of components/ToolBar
 
@@ -103,6 +106,12 @@ export default function ContentCreatorPage() {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [copiedBlocks, setCopiedBlocks] = useState<Block[]>([]);
   const [textPlacementMode, setTextPlacementMode] = useState<TextVariant | null>(null);
+  const [lessonState, setLessonState] = useState<"draft" | "published">("draft");
+  const collaborators = [
+    { id: 'self', name: 'You', avatarUrl: '/avatars/user-1.jpg', fallback: 'https://i.pravatar.cc/80?img=11', isSelf: true },
+    { id: 'c1', name: 'Ava Chen', avatarUrl: '/avatars/user-2.jpg', fallback: 'https://i.pravatar.cc/80?img=32' },
+    { id: 'c2', name: 'Marco Diaz', avatarUrl: '/avatars/user-3.jpg', fallback: 'https://i.pravatar.cc/80?img=56' },
+  ];
   const [shapePlacementMode, setShapePlacementMode] = useState<ShapeVariant | null>(null);
   const [marqueeSelection, setMarqueeSelection] = useState<{
     isActive: boolean;
@@ -975,55 +984,50 @@ export default function ContentCreatorPage() {
 
   return (
     <div className="flex min-h-dvh flex-col">
-      <header className="bg-white/80 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-7xl items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2 relative">
-          {editingTitle ? (
-            <Input 
-              value={title} 
-              onChange={(e) => setTitle(e.target.value)} 
-              placeholder="Title of episode" 
-              className="max-w-sm lg:max-w-xl text-lg lg:text-2xl font-semibold"
-              autoFocus
-              onBlur={() => setEditingTitle(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setEditingTitle(false);
-                }
-                if (e.key === 'Escape') {
-                  setEditingTitle(false);
-                }
-              }}
-            />
-          ) : (
-            <h1 
-              className="text-lg lg:text-2xl font-semibold cursor-pointer hover:text-muted-foreground transition-colors max-w-sm lg:max-w-xl"
-              onClick={() => setEditingTitle(true)}
-              title="Click to edit title"
-            >
-              {title || "Click to set title"}
-            </h1>
-          )}
+      <header className="bg-gray-50/80 backdrop-blur-sm">
+        <div className="flex items-center justify-between gap-3 px-3 lg:px-4 py-2 relative">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" aria-label="Home" className="h-9 w-9">
+              <Home className="h-5 w-5" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Menu" className="h-9 w-9">
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex flex-col">
+            {editingTitle ? (
+              <Input 
+                value={title} 
+                onChange={(e) => setTitle(e.target.value)} 
+                placeholder="Title of lesson" 
+                className="max-w-sm lg:max-w-xl text-base lg:text-lg font-semibold py-1"
+                autoFocus
+                onBlur={() => setEditingTitle(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'Escape') setEditingTitle(false);
+                }}
+              />
+            ) : (
+              <div className="cursor-pointer select-none" onClick={() => setEditingTitle(true)} title="Click to edit title">
+                <h1 className="text-base lg:text-lg font-semibold leading-tight max-w-sm lg:max-w-xl">
+                  {title || "Untitled lesson"}
+                </h1>
+              </div>
+            )}
+            <span className="text-sm text-muted-foreground">{lessonState === 'published' ? 'Published' : 'Draft'}</span>
+            </div>
+          </div>
           {/* Tool bar (center floating pill) */}
           <ToolBarComp gridView={gridView} addTextNow={addTextNow} addShape={addShape} />
 
-          <div className="ml-auto flex items-center gap-2">
-            {/* Save Status Indicator (only show when NOT saved) */}
-            {saveStatus !== 'saved' && (
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                {saveStatus === 'saving' && (
-                  <>
-                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
-                    <span>Saving…</span>
-                  </>
-                )}
-                {saveStatus === 'error' && (
-                  <>
-                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                    <span>Error saving</span>
-                  </>
-                )}
-              </div>
-            )}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center -space-x-2">
+              <button className="h-8 w-8 rounded-full ring-2 ring-white bg-gray-100 text-gray-500 flex items-center justify-center" title="Invite">
+                +
+              </button>
+              {collaborators.map(c => (
+                <img key={c.id} src={c.avatarUrl} onError={(e) => { (e.currentTarget as HTMLImageElement).src = c.fallback; }} alt={c.name} title={c.isSelf ? 'You' : c.name} className="h-8 w-8 rounded-full ring-2 ring-white object-cover" />
+              ))}
+            </div>
             <Button>Preview</Button>
             <Button variant="outline">Share</Button>
           </div>
@@ -1031,7 +1035,7 @@ export default function ContentCreatorPage() {
       </header>
 
       {gridView ? (
-        <div className="flex-1 p-6 overflow-auto bg-gray-50/30">
+        <div className="flex-1 p-6 overflow-auto bg-gray-50/30" data-flip-id="center-pane">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-6 max-w-7xl mx-auto">
             {slides.map((slide) => (
               <div
@@ -1043,6 +1047,7 @@ export default function ContentCreatorPage() {
                       ? 'ring-2 ring-blue-400'
                       : 'hover:bg-accent'
                 }`}
+                data-flip-id={`slide-${slide.id}`}
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey) {
                     setSelectedSlideIds(prev => 
@@ -1055,10 +1060,28 @@ export default function ContentCreatorPage() {
                       prev.includes(slide.id) ? prev : [...prev, slide.id]
                     );
                   } else {
-                    setCurrentSlideId(slide.id);
-                    setSelectedSlideIds([]);
-                    setSelectedIds([]);
-                    setGridView(false); // Exit grid view when selecting a slide
+                    const selector = `[data-flip-id="slide-${slide.id}"]`;
+                    const state = Flip.getState(selector);
+                    flushSync(() => {
+                      setCurrentSlideId(slide.id);
+                      setSelectedSlideIds([]);
+                      setSelectedIds([]);
+                      setGridView(false);
+                    });
+                    requestAnimationFrame(() => {
+                      Flip.from(state, {
+                        duration: 0.4,
+                        ease: 'power3.out',
+                        absolute: true,
+                        nested: true,
+                        simple: false,
+                        scale: true,
+                        prune: true,
+                        transformOrigin: 'center center',
+                        zIndex: 9999,
+                        targets: selector
+                      });
+                    });
                   }
                 }}
               >
@@ -1135,7 +1158,7 @@ export default function ContentCreatorPage() {
               <div
                 key={slide.id}
                 id={`slide-${slide.id}`}
-                className={`group relative h-24 w-full rounded-lg bg-white shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                className={`group relative aspect-video w-full rounded-lg bg-white shadow-sm cursor-pointer transition-all hover:shadow-md ${
                   slide.id === currentSlideId 
                     ? 'ring-2 ring-primary' 
                     : selectedSlideIds.includes(slide.id)
@@ -1170,7 +1193,10 @@ export default function ContentCreatorPage() {
                   }
                 }}
               >
-                <div className="p-2">
+                <div className="absolute inset-0 p-2">
+                  <div className="h-full w-full rounded bg-gray-50/50"></div>
+                </div>
+                <div className="relative p-2">
                   <p className="text-xs font-medium truncate">{slide.title}</p>
                 </div>
                 {slides.length > 1 && (
@@ -1192,10 +1218,15 @@ export default function ContentCreatorPage() {
           </div>
         </aside>
 
-        <main className="relative overflow-auto bg-gray-50/50">
+        <main className="relative overflow-auto bg-gray-50/50" data-flip-id="center-pane">
           <div 
             className="flex h-full items-center justify-center p-6" 
             tabIndex={-1}
+            ref={(el) => {
+              // Animate layout between canvas and grid using GSAP Flip
+              // Store latest container for Flip context
+              (window as any).__ccCanvasWrap = el;
+            }}
           >
             {slides.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-[540px] w-[960px] max-h-[50vh] max-w-[80vw] rounded-lg bg-white/60 shadow-sm" style={{aspectRatio: '16/9'}}>
@@ -1217,6 +1248,7 @@ export default function ContentCreatorPage() {
                       ? '' 
                       : 'bg-white'
                 }`} 
+                data-flip-id={`slide-${currentSlideId}`}
                 tabIndex={0}
                 style={{
                   aspectRatio: '16/9',
@@ -1677,7 +1709,34 @@ export default function ContentCreatorPage() {
           size="sm"
           variant="outline"
           className="rounded-full h-10 w-10 p-0 shadow-lg"
-          onClick={() => setGridView(!gridView)}
+          onClick={() => {
+            const isEnteringGrid = !gridView;
+            const selector = `[data-flip-id="slide-${currentSlideId}"]`;
+            const state = Flip.getState(selector);
+            flushSync(() => setGridView(isEnteringGrid));
+            requestAnimationFrame(() => {
+              const tl = gsap.timeline();
+              tl.add(Flip.from(state, {
+                duration: isEnteringGrid ? 0.45 : 0.4,
+                ease: 'power3.out',
+                absolute: true,
+                nested: true,
+                simple: false,
+                scale: true,
+                prune: true,
+                transformOrigin: 'center center',
+                zIndex: 9999,
+                targets: selector
+              }), 0);
+              if (isEnteringGrid) {
+                tl.fromTo(`[data-flip-id^="slide-"]:not(${selector})`, 
+                  { opacity: 0, y: 8 }, 
+                  { opacity: 1, y: 0, duration: 0.25, ease: 'power2.out', stagger: { amount: 0.12 } },
+                  0.05
+                );
+              }
+            });
+          }}
           title={gridView ? "Exit grid view" : "Enter grid view"}
         >
           {gridView ? (
